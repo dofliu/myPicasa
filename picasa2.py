@@ -2,12 +2,14 @@ import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QListWidget, QComboBox, QFileDialog,
-    QMessageBox, QDialog, QScrollArea, QAction
+    QMessageBox, QDialog, QScrollArea, QAction, QTabWidget
 )
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
 from PIL import Image
 from PIL import ImageQt  # 匯入 ImageQt 模組
+from moviepy.editor import VideoFileClip, concatenate_videoclips # type: ignore
+from natsort import natsorted # For natural sorting of filenames
 
 # 判斷 Pillow 版本，選擇適用的縮放參數
 try:
@@ -56,14 +58,25 @@ class ImageTool(QMainWindow):
         main_layout = QVBoxLayout()
         central_widget.setLayout(main_layout)
 
+        self.tab_widget = QTabWidget()
+        main_layout.addWidget(self.tab_widget)
+
+        self._createImageTab()
+        self._createVideoTab()
+        self._createConvertImageTab()
+
+    def _createImageTab(self):
+        image_tab = QWidget()
+        image_layout = QVBoxLayout(image_tab)
+
         # 選擇圖片檔案按鈕
         btn_select = QPushButton("選擇圖片檔案")
         btn_select.clicked.connect(self.selectFiles)
-        main_layout.addWidget(btn_select)
+        image_layout.addWidget(btn_select)
 
         # 顯示選取檔案的清單
         self.filesList = QListWidget()
-        main_layout.addWidget(self.filesList)
+        image_layout.addWidget(self.filesList)
 
         # 網格參數設定（列數與行數）
         grid_layout = QHBoxLayout()
@@ -78,7 +91,7 @@ class ImageTool(QMainWindow):
         grid_layout.addWidget(lbl_rows)
         grid_layout.addWidget(self.editRows)
         grid_layout.addStretch()
-        main_layout.addLayout(grid_layout)
+        image_layout.addLayout(grid_layout)
 
         # 縮放策略選擇
         strategy_layout = QHBoxLayout()
@@ -88,7 +101,7 @@ class ImageTool(QMainWindow):
         strategy_layout.addWidget(lbl_strategy)
         strategy_layout.addWidget(self.comboStrategy)
         strategy_layout.addStretch()
-        main_layout.addLayout(strategy_layout)
+        image_layout.addLayout(strategy_layout)
 
         # 拼接與預覽按鈕
         action_layout = QHBoxLayout()
@@ -96,7 +109,7 @@ class ImageTool(QMainWindow):
         btn_merge.clicked.connect(self.mergeImages)
         action_layout.addWidget(btn_merge)
         action_layout.addStretch()
-        main_layout.addLayout(action_layout)
+        image_layout.addLayout(action_layout)
 
         # GIF 動畫參數與生成按鈕
         gif_layout = QHBoxLayout()
@@ -109,10 +122,78 @@ class ImageTool(QMainWindow):
         gif_layout.addWidget(self.editDuration)
         gif_layout.addWidget(btn_gif)
         gif_layout.addStretch()
-        main_layout.addLayout(gif_layout)
+        image_layout.addLayout(gif_layout)
 
-        self.image_label = QLabel(self)
-        main_layout.addWidget(self.image_label)
+        self.image_label = QLabel(image_tab)
+        image_layout.addWidget(self.image_label)
+
+        self.tab_widget.addTab(image_tab, "圖片處理")
+
+    def _createVideoTab(self):
+        video_tab = QWidget()
+        video_layout = QVBoxLayout(video_tab)
+
+        # 影片合併參數與生成按鈕
+        video_controls_layout = QHBoxLayout()
+        btn_select_videos = QPushButton("選擇影片檔案")
+        btn_select_videos.clicked.connect(self.selectVideoFiles)
+        self.editOutputVideoName = QLineEdit("merged_video.mp4")
+        self.editOutputVideoName.setPlaceholderText("輸出影片檔名 (e.g., merged_video.mp4)")
+        btn_merge_videos = QPushButton("合併影片")
+        btn_merge_videos.clicked.connect(self.mergeVideos)
+        video_controls_layout.addWidget(btn_select_videos)
+        video_controls_layout.addWidget(self.editOutputVideoName)
+        video_controls_layout.addWidget(btn_merge_videos)
+        video_controls_layout.addStretch()
+        video_layout.addLayout(video_controls_layout)
+
+        self.videoFilesList = QListWidget()
+        video_layout.addWidget(self.videoFilesList)
+
+        self.tab_widget.addTab(video_tab, "影片處理")
+
+    def _createConvertImageTab(self):
+        convert_image_tab = QWidget()
+        convert_image_layout = QVBoxLayout(convert_image_tab)
+
+        # 選擇圖片檔案按鈕
+        btn_select_convert_images = QPushButton("選擇要轉換的圖片檔案")
+        btn_select_convert_images.clicked.connect(self.selectConvertImages)
+        convert_image_layout.addWidget(btn_select_convert_images)
+
+        # 顯示選取檔案的清單
+        self.convertFilesList = QListWidget()
+        convert_image_layout.addWidget(self.convertFilesList)
+
+        # 輸出格式選擇
+        output_format_layout = QHBoxLayout()
+        lbl_output_format = QLabel("輸出格式:")
+        self.comboOutputFormat = QComboBox()
+        self.comboOutputFormat.addItems(["JPG", "PNG", "WEBP", "BMP", "GIF"])
+        output_format_layout.addWidget(lbl_output_format)
+        output_format_layout.addWidget(self.comboOutputFormat)
+        output_format_layout.addStretch()
+        convert_image_layout.addLayout(output_format_layout)
+
+        # 輸出資料夾
+        output_folder_layout = QHBoxLayout()
+        lbl_output_folder = QLabel("輸出資料夾:")
+        self.editOutputFolder = QLineEdit("converted_images")
+        self.editOutputFolder.setPlaceholderText("輸出資料夾 (留空則儲存至原資料夾)")
+        btn_browse_output_folder = QPushButton("瀏覽")
+        btn_browse_output_folder.clicked.connect(self.browseOutputFolder)
+        output_folder_layout.addWidget(lbl_output_folder)
+        output_folder_layout.addWidget(self.editOutputFolder)
+        output_folder_layout.addWidget(btn_browse_output_folder)
+        output_folder_layout.addStretch()
+        convert_image_layout.addLayout(output_folder_layout)
+
+        # 開始轉換按鈕
+        btn_convert_images = QPushButton("開始轉換")
+        btn_convert_images.clicked.connect(self.convertImages)
+        convert_image_layout.addWidget(btn_convert_images)
+
+        self.tab_widget.addTab(convert_image_tab, "圖片格式轉換")
 
     def create_actions(self):
         self.open_action = QAction("打開", self)
@@ -142,6 +223,31 @@ class ImageTool(QMainWindow):
             self.filesList.clear()
             for file in files:
                 self.filesList.addItem(file)
+
+    def selectVideoFiles(self):
+        videos, _ = QFileDialog.getOpenFileNames(
+            self, "選擇影片檔案", "",
+            "Video Files (*.mp4 *.avi *.mov *.mkv *.webm *.flv)"
+        )
+        if videos:
+            self.videoFilesList.clear()
+            for video in videos:
+                self.videoFilesList.addItem(video)
+
+    def selectConvertImages(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "選擇要轉換的圖片檔案", "",
+            "Image Files (*.jpg *.jpeg *.png *.bmp *.gif *.webp)"
+        )
+        if files:
+            self.convertFilesList.clear()
+            for file in files:
+                self.convertFilesList.addItem(file)
+
+    def browseOutputFolder(self):
+        folder_path = QFileDialog.getExistingDirectory(self, "選擇輸出資料夾")
+        if folder_path:
+            self.editOutputFolder.setText(folder_path)
 
     def generateMergedImage(self):
         count = self.filesList.count()
@@ -244,6 +350,93 @@ class ImageTool(QMainWindow):
                 QMessageBox.information(self, "完成", f"GIF 動畫已儲存至\n{save_path}")
             except Exception as e:
                 QMessageBox.critical(self, "錯誤", f"儲存 GIF 失敗：{e}")
+
+    def mergeVideos(self):
+        count = self.videoFilesList.count()
+        if count == 0:
+            QMessageBox.warning(self, "警告", "請先選擇影片檔案")
+            return
+
+        video_files = [self.videoFilesList.item(i).text() for i in range(count)]
+        output_filename = self.editOutputVideoName.text()
+
+        if not output_filename:
+            QMessageBox.warning(self, "警告", "請輸入輸出影片檔名")
+            return
+
+        # 使用 natsorted 進行自然排序，確保檔案順序符合預期
+        video_files = natsorted(video_files)
+
+        clips = []
+        try:
+            for video_file in video_files:
+                clip = VideoFileClip(video_file)
+                clips.append(clip)
+        except Exception as e:
+            QMessageBox.critical(self, "錯誤", f"讀取影片時發生錯誤：{e}")
+            for loaded_clip in clips:
+                loaded_clip.close()
+            return
+
+        if not clips:
+            QMessageBox.warning(self, "警告", "沒有任何影片可以成功載入並合併。")
+            return
+
+        try:
+            QMessageBox.information(self, "進度", "開始合併影片，這可能需要一些時間...")
+            final_clip = concatenate_videoclips(clips, method="compose")
+            final_clip.write_videofile(output_filename, codec="libx264", audio_codec="aac")
+            QMessageBox.information(self, "完成", f"影片成功合併並儲存至\n{output_filename}")
+        except Exception as e:
+            QMessageBox.critical(self, "錯誤", f"合併影片或寫入檔案時發生錯誤：{e}")
+        finally:
+            for clip in clips:
+                clip.close()
+            if 'final_clip' in locals() and final_clip:
+                final_clip.close()
+
+    def convertImages(self):
+        count = self.convertFilesList.count()
+        if count == 0:
+            QMessageBox.warning(self, "警告", "請先選擇要轉換的圖片檔案")
+            return
+
+        output_format = self.comboOutputFormat.currentText().lower()
+        output_folder = self.editOutputFolder.text()
+
+        if not output_folder:
+            # 如果沒有指定輸出資料夾，則儲存到原始檔案的資料夾
+            output_folder = None
+        else:
+            # 確保輸出資料夾存在
+            import os
+            if not os.path.exists(output_folder):
+                os.makedirs(output_folder)
+
+        success_count = 0
+        for i in range(count):
+            file_path = self.convertFilesList.item(i).text()
+            try:
+                img = Image.open(file_path)
+                
+                # 構建輸出檔案路徑
+                import os
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+                if output_folder:
+                    save_path = os.path.join(output_folder, f"{base_name}.{output_format}")
+                else:
+                    save_path = os.path.join(os.path.dirname(file_path), f"{base_name}.{output_format}")
+
+                img.save(save_path, format=output_format.upper())
+                success_count += 1
+            except Exception as e:
+                QMessageBox.warning(self, "轉換失敗", f"檔案 {os.path.basename(file_path)} 轉換失敗：{e}")
+        
+        if success_count > 0:
+            QMessageBox.information(self, "完成", f"成功轉換 {success_count} 個檔案到 {output_folder if output_folder else '原始資料夾'}")
+        else:
+            QMessageBox.critical(self, "錯誤", "沒有檔案成功轉換")
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

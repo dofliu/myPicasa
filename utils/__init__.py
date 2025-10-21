@@ -6,6 +6,8 @@ from .config import Config
 from .modern_style import ModernStyle
 from .drag_drop import DragDropListWidget
 from .preview_widget import ImagePreviewGrid, ImageViewerDialog
+from .batch_rename import batch_rename_files
+from .image_editor import edit_image, batch_edit_images
 
 __all__ = [
     'resize_with_padding',
@@ -15,5 +17,8 @@ __all__ = [
     'ModernStyle',
     'DragDropListWidget',
     'ImagePreviewGrid',
-    'ImageViewerDialog'
+    'ImageViewerDialog',
+    'batch_rename_files',
+    'edit_image',
+    'batch_edit_images'
 ]

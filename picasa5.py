@@ -382,7 +382,7 @@ class ModernImageTool(QMainWindow):
         else:
             self.setStyleSheet(ModernStyle.get_light_stylesheet())
 
-def _show_image_viewer(self, file_path):
+    def _show_image_viewer(self, file_path):
         """顯示圖片檢視器"""
         dialog = ImageViewerDialog(file_path, self)
         dialog.exec_()

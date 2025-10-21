@@ -44,8 +44,16 @@ pip install -r requirements.txt
 ```
 
 ### 3. 運行應用程式
+
+**現代化美化版本（推薦）：**
 ```bash
-python picasa2.py
+python picasa4.py
+```
+
+**或使用其他版本：**
+```bash
+python picasa2.py  # 分頁版本
+python picasa3.py  # 改進版本
 ```
 
 ## 使用說明
@@ -84,14 +92,33 @@ python picasa2.py
 
 ```
 myPicasa/
-├── picasa2.py          # 主程式（分頁介面版本）
-├── picasa.py           # 替代版本（單視窗介面）
-├── videoMerge.py       # 獨立影片合併工具
-├── 123.html            # 網頁版動漫風格轉換器
-├── requirements.txt    # Python 依賴套件清單
-├── tests/              # 單元測試
-└── README.md           # 專案說明文件
+├── picasa.py            # 原始版本（單視窗介面）
+├── picasa2.py           # 分頁版本
+├── picasa3.py           # 改進版本（模組化架構）
+├── picasa4.py           # 現代化美化版本 ⭐ 推薦
+├── videoMerge.py        # 獨立影片合併工具
+├── 123.html             # 網頁版動漫風格轉換器
+├── requirements.txt     # Python 依賴套件清單
+├── run_tests.py         # 測試執行腳本
+├── utils/               # 工具模組
+│   ├── image_utils.py   # 圖片處理工具
+│   ├── config.py        # 配置管理
+│   └── modern_style.py  # 現代化 UI 樣式
+├── tests/               # 單元測試
+│   ├── test_image_utils.py
+│   └── test_video_merge.py
+├── README.md            # 專案說明文件
+└── UI_DESIGN.md         # UI 設計說明文件
 ```
+
+## 🎨 版本特色比較
+
+| 版本 | 特色 | 適合對象 |
+|------|------|----------|
+| **picasa4.py** ⭐ | 現代化 UI、主題切換、Emoji 圖標 | 想要美觀介面的使用者 |
+| **picasa3.py** | 模組化架構、改善錯誤處理 | 開發者和進階使用者 |
+| **picasa2.py** | 分頁介面、完整功能 | 一般使用者 |
+| **picasa.py** | 簡單直接 | 喜歡簡約風格的使用者 |
 
 ## 技術堆疊
 
@@ -131,6 +158,12 @@ A: 可以在拼接前先縮小圖片尺寸，或減少幀數來降低檔案大�
 
 ### Q: 影片合併時出現錯誤？
 A: 請確保所有影片的編碼格式相容，建議使用相同解析度和幀率的影片。
+
+### Q: 如何切換深色/淺色主題？
+A: 在 picasa4.py 版本中，點擊右上角的「🌙 深色模式」或「☀️ 淺色模式」按鈕即可切換。
+
+### Q: 哪個版本最推薦？
+A: 推薦使用 **picasa4.py**，它擁有現代化的美觀介面、主題切換功能，並保留所有完整功能。
 
 ## 貢獻
 

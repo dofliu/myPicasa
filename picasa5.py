@@ -29,7 +29,8 @@ from natsort import natsorted
 # 導入自訂工具模組
 from utils import (
     resize_with_padding, resize_image, Config,
-    DragDropListWidget, ImagePreviewGrid, ImageViewerDialog
+    DragDropListWidget, ImagePreviewGrid, ImageViewerDialog,
+    add_watermark
 )
 from utils.modern_style import ModernStyle
 
@@ -195,6 +196,11 @@ class ModernImageTool(QMainWindow):
         btn_gif.clicked.connect(self.create_gif)
         btn_gif.setMinimumHeight(44)
         action_layout.addWidget(btn_gif)
+
+        btn_watermark = QPushButton("🏷️ 添加浮水印")
+        btn_watermark.clicked.connect(self._add_watermark)
+        btn_watermark.setMinimumHeight(44)
+        action_layout.addWidget(btn_watermark)
 
         image_layout.addLayout(action_layout)
         image_layout.addStretch()
@@ -410,6 +416,22 @@ class ModernImageTool(QMainWindow):
         """處理轉換檔案拖放"""
         self.convert_files_list.add_files(files)
         self.statusBar().showMessage(f'✅ 已新增 {len(files)} 個圖片檔案待轉換')
+
+    def _add_watermark(self):
+        """添加浮水印"""
+        files = self.image_preview.get_files()
+        if not files:
+            self.show_warning("請先選擇圖片檔案")
+            return
+
+        # 呼叫浮水印對話框
+        if add_watermark(files, self):
+            self.statusBar().showMessage(f'✅ 浮水印添加完成')
+            QMessageBox.information(
+                self,
+                "完成",
+                "浮水印已成功添加到圖片！"
+            )
 
     def show_about(self):
         """顯示關於對話框"""

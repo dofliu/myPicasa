@@ -3,6 +3,9 @@
 """
 MediaToolkit - 多媒體與文檔處理工具套件 v6.0
 整合圖片影像處理 + 文件轉換功能
+
+Copyright © 2025 Dof Liu AI工作室
+All Rights Reserved.
 """
 import sys
 import os
@@ -100,7 +103,7 @@ class MediaToolkit(QMainWindow):
         self.category_tabs.addTab(doc_widget, "📄 文件轉換工具")
         main_layout.addWidget(self.category_tabs)
         
-        self.statusBar().showMessage('🎉 MediaToolkit 已就緒！')
+        self.statusBar().showMessage('🎉 MediaToolkit 已就緒！  |  © 2025 Dof Liu AI工作室')
 
     def _create_image_tab(self):
         """圖片處理分頁"""
@@ -616,9 +619,16 @@ class MediaToolkit(QMainWindow):
     def show_about(self):
         QMessageBox.about(self, "關於 MediaToolkit",
             "<h2>📦 MediaToolkit v6.0</h2>"
-            "<p>多媒體與文檔處理工具套件</p>"
+            "<p><b>多媒體與文檔處理工具套件</b></p>"
             "<p>整合圖片、影片與文檔處理功能</p>"
-            "<p style='color:#64748B;'>© 2025</p>")
+            "<br>"
+            "<p><b>功能模組：</b></p>"
+            "<p>• 圖片處理：拼接、GIF、浮水印、批次編輯</p>"
+            "<p>• 影片處理：合併、格式轉換</p>"
+            "<p>• 文檔處理：Word↔PDF、PDF 合併</p>"
+            "<br>"
+            "<p style='color:#5B9BD5; font-weight:bold;'>© 2025 Dof Liu AI工作室</p>"
+            "<p style='color:#607D8B; font-size:9pt;'>All Rights Reserved.</p>")
 
     def show_warning(self, msg):
         QMessageBox.warning(self, "⚠️ 警告", msg)

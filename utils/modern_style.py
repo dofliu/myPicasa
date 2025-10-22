@@ -7,40 +7,40 @@
 class ModernStyle:
     """現代化樣式管理類別"""
 
-    # 深色主題配色
+    # 深色主題配色 - 優化版（更柔和的色調）
     DARK_THEME = {
-        'primary': '#3B82F6',      # 藍色
-        'primary_dark': '#2563EB',
-        'primary_light': '#60A5FA',
-        'secondary': '#8B5CF6',    # 紫色
-        'success': '#10B981',      # 綠色
-        'warning': '#F59E0B',      # 橙色
-        'danger': '#EF4444',       # 紅色
-        'background': '#1E293B',   # 深灰背景
-        'surface': '#334155',      # 表面色
-        'surface_light': '#475569',
-        'text': '#F1F5F9',         # 文字色
-        'text_secondary': '#CBD5E1',
-        'border': '#475569',
-        'hover': '#475569',
+        'primary': '#4F96D8',      # 柔和藍色（降低飽和度）
+        'primary_dark': '#3B7AB8',
+        'primary_light': '#6AAFE8',
+        'secondary': '#9D7DC7',    # 柔和紫色
+        'success': '#4CAF8F',      # 柔和綠色
+        'warning': '#F5A644',      # 柔和橙色
+        'danger': '#E57373',       # 柔和紅色
+        'background': '#1A2332',   # 更深的背景
+        'surface': '#2D3748',      # 表面色
+        'surface_light': '#3D4B5F',
+        'text': '#E8EEF3',         # 文字色
+        'text_secondary': '#B8C5D6',
+        'border': '#3D4B5F',
+        'hover': '#3D4B5F',
     }
 
-    # 淺色主題配色
+    # 淺色主題配色 - 優化版（更協調的色調）
     LIGHT_THEME = {
-        'primary': '#3B82F6',
-        'primary_dark': '#2563EB',
-        'primary_light': '#DBEAFE',
-        'secondary': '#8B5CF6',
-        'success': '#10B981',
-        'warning': '#F59E0B',
-        'danger': '#EF4444',
-        'background': '#F8FAFC',   # 淺灰背景
+        'primary': '#5B9BD5',      # 柔和藍色
+        'primary_dark': '#4682C4',
+        'primary_light': '#E3F2FD',
+        'secondary': '#9575CD',    # 柔和紫色
+        'success': '#66BB6A',      # 柔和綠色
+        'warning': '#FFA726',      # 柔和橙色
+        'danger': '#EF5350',       # 柔和紅色
+        'background': '#F5F7FA',   # 更柔和的背景
         'surface': '#FFFFFF',      # 白色表面
-        'surface_light': '#F1F5F9',
-        'text': '#1E293B',         # 深色文字
-        'text_secondary': '#64748B',
-        'border': '#E2E8F0',
-        'hover': '#F1F5F9',
+        'surface_light': '#F0F4F8',
+        'text': '#2C3E50',         # 深色文字
+        'text_secondary': '#607D8B',
+        'border': '#DDE4EC',
+        'hover': '#EBF3FC',        # 淺藍色懸停
     }
 
     @classmethod

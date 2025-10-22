@@ -13,6 +13,7 @@ from .doc_converter import (
     convert_word_to_pdf, convert_pdf_to_word, merge_pdfs,
     get_pdf_info, check_dependencies
 )
+from .config_manager import ConfigManager, get_config_manager
 
 __all__ = [
     'resize_with_padding',
@@ -31,5 +32,7 @@ __all__ = [
     'convert_pdf_to_word',
     'merge_pdfs',
     'get_pdf_info',
-    'check_dependencies'
+    'check_dependencies',
+    'ConfigManager',
+    'get_config_manager'
 ]

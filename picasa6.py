@@ -24,7 +24,7 @@ from utils import (
     resize_with_padding, resize_image, Config,
     DragDropListWidget, ImagePreviewGrid, ImageViewerDialog,
     add_watermark, convert_word_to_pdf, convert_pdf_to_word,
-    merge_pdfs, get_pdf_info, check_dependencies
+    merge_pdfs, get_pdf_info, check_dependencies, get_config_manager
 )
 from utils.modern_style import ModernStyle
 
@@ -34,15 +34,26 @@ class MediaToolkit(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.current_theme = "light"
+
+        # 載入配置管理器
+        self.config = get_config_manager()
+
+        # 從配置載入設定
+        self.current_theme = self.config.get('theme', 'light')
         self._group_boxes = []
         self.setWindowTitle("📦 MediaToolkit v6.0 - 多媒體與文檔處理工具套件")
-        self.resize(1200, 800)
+
+        # 從配置恢復視窗大小和位置
+        self._restore_window_geometry()
         self.setMinimumSize(1000, 700)
+
         self.doc_deps = check_dependencies()
         self._init_ui()
         self._create_menus()
         self._apply_theme(self.current_theme)
+
+        # 載入保存的參數
+        self._load_parameters()
 
     def _init_ui(self):
         """初始化 UI"""
@@ -392,6 +403,8 @@ class MediaToolkit(QMainWindow):
         self.current_theme = "dark" if self.current_theme == "light" else "light"
         self.theme_btn.setText("☀️ 淺色模式" if self.current_theme == "dark" else "🌙 深色模式")
         self._apply_theme(self.current_theme)
+        # 保存主題設定
+        self.config.set('theme', self.current_theme)
 
     def _apply_theme(self, theme):
         """套用主題"""
@@ -400,6 +413,77 @@ class MediaToolkit(QMainWindow):
         card_style = ModernStyle.get_card_style(theme)
         for group in self._group_boxes:
             group.setStyleSheet(card_style)
+
+    # === 配置管理方法 ===
+    def _restore_window_geometry(self):
+        """從配置恢復視窗大小和位置"""
+        width = self.config.get('window.width', 1200)
+        height = self.config.get('window.height', 800)
+        self.resize(width, height)
+
+        x = self.config.get('window.x')
+        y = self.config.get('window.y')
+        if x is not None and y is not None:
+            self.move(x, y)
+
+        if self.config.get('window.maximized', False):
+            self.showMaximized()
+
+    def _save_window_geometry(self):
+        """保存視窗大小和位置"""
+        self.config.set('window.width', self.width(), auto_save=False)
+        self.config.set('window.height', self.height(), auto_save=False)
+        self.config.set('window.x', self.x(), auto_save=False)
+        self.config.set('window.y', self.y(), auto_save=False)
+        self.config.set('window.maximized', self.isMaximized(), auto_save=False)
+
+    def _load_parameters(self):
+        """從配置載入參數"""
+        # 圖片處理參數
+        self.edit_cols.setText(str(self.config.get('image.grid_cols', 3)))
+        self.edit_rows.setText(str(self.config.get('image.grid_rows', 3)))
+        self.edit_duration.setText(str(self.config.get('image.gif_duration', 500)))
+
+        strategy = self.config.get('image.resize_strategy', '直接縮放')
+        index = self.combo_strategy.findText(strategy)
+        if index >= 0:
+            self.combo_strategy.setCurrentIndex(index)
+
+        # 影片處理參數
+        self.edit_output_video.setText(self.config.get('video.output_name', 'merged_video.mp4'))
+
+        # 格式轉換參數
+        self.edit_output_folder.setText(self.config.get('convert.output_folder', 'converted_images'))
+
+        fmt = self.config.get('convert.output_format', 'PNG')
+        index = self.combo_output_format.findText(fmt)
+        if index >= 0:
+            self.combo_output_format.setCurrentIndex(index)
+
+    def _save_parameters(self):
+        """保存參數到配置"""
+        try:
+            # 圖片處理參數
+            self.config.set('image.grid_cols', int(self.edit_cols.text()), auto_save=False)
+            self.config.set('image.grid_rows', int(self.edit_rows.text()), auto_save=False)
+            self.config.set('image.gif_duration', int(self.edit_duration.text()), auto_save=False)
+            self.config.set('image.resize_strategy', self.combo_strategy.currentText(), auto_save=False)
+
+            # 影片處理參數
+            self.config.set('video.output_name', self.edit_output_video.text(), auto_save=False)
+
+            # 格式轉換參數
+            self.config.set('convert.output_folder', self.edit_output_folder.text(), auto_save=False)
+            self.config.set('convert.output_format', self.combo_output_format.currentText(), auto_save=False)
+        except:
+            pass  # 忽略轉換錯誤
+
+    def closeEvent(self, event):
+        """關閉視窗時保存配置"""
+        self._save_window_geometry()
+        self._save_parameters()
+        self.config.save_config()
+        event.accept()
 
     # === 圖片影像處理方法 ===
     def _show_image_viewer(self, path):

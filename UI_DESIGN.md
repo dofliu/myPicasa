@@ -217,7 +217,7 @@ app.setStyleSheet(stylesheet)
 `ModernStyle` 類別提供：
 - `get_dark_stylesheet()` - 深色主題樣式
 - `get_light_stylesheet()` - 淺色主題樣式
-- `get_card_style()` - 卡片樣式
+- `get_card_style(theme="light")` - 卡片樣式
 - `DARK_THEME` - 深色主題配色字典
 - `LIGHT_THEME` - 淺色主題配色字典
 

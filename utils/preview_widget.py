@@ -7,9 +7,11 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QGridLayout, QDialog, QFrame, QSizePolicy
 )
-from PyQt5.QtGui import QPixmap, QImage, QPainter
+from PyQt5.QtGui import QPixmap, QImage, QPainter, QDragEnterEvent, QDropEvent
 from PyQt5.QtCore import Qt, pyqtSignal, QSize
 from PIL import Image
+
+from .config import Config
 
 
 class ImageThumbnail(QFrame):
@@ -158,6 +160,9 @@ class ImagePreviewGrid(QWidget):
         super().__init__(parent)
         self.thumbnails = []  # 儲存縮圖小工具
         self.files = []  # 儲存檔案路徑
+        self.setAcceptDrops(True)
+        self._image_extensions = {f".{ext.lower()}" for ext in Config.SUPPORTED_IMAGE_FORMATS}
+        self._image_extensions.add(".jpeg")
         self._init_ui()
 
     def _init_ui(self):
@@ -208,18 +213,21 @@ class ImagePreviewGrid(QWidget):
         self.grid_layout.addWidget(self.placeholder, 0, 0, Qt.AlignCenter)
 
     def add_files(self, file_paths):
-        """
-        新增檔案到預覽網格
+        """?????????
 
         Args:
-            file_paths: 檔案路徑列表
+            file_paths: ??????
         """
+        added_any = False
         for file_path in file_paths:
             if file_path not in self.files:
                 self.files.append(file_path)
                 self._add_thumbnail(file_path)
+                added_any = True
 
         self._update_ui()
+        if added_any:
+            self.files_changed.emit()
 
     def _add_thumbnail(self, file_path):
         """新增縮圖"""
@@ -275,6 +283,101 @@ class ImagePreviewGrid(QWidget):
         self.thumbnails.clear()
         self._update_ui()
         self.files_changed.emit()
+
+    # === Drag & Drop 支援 ===
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """拖曳進入事件"""
+        if self._can_accept_event(event):
+            event.acceptProposedAction()
+            self._set_drag_highlight(True)
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        """拖曳移動事件"""
+        if self._can_accept_event(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        """拖曳離開事件"""
+        self._set_drag_highlight(False)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent):
+        """拖曳放下事件"""
+        self._set_drag_highlight(False)
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            return
+
+        dropped_files = self._extract_files_from_event(event)
+        if dropped_files:
+            self.add_files(dropped_files)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def _can_accept_event(self, event):
+        """判斷拖曳事件是否可被接受"""
+        if not event.mimeData().hasUrls():
+            return False
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if not path:
+                continue
+            if os.path.isdir(path) or self._is_supported_file(path):
+                return True
+        return False
+
+    def _extract_files_from_event(self, event):
+        """從拖曳事件取得所有有效檔案"""
+        files = []
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if not path:
+                continue
+            if os.path.isdir(path):
+                files.extend(self._scan_directory(path))
+            elif self._is_supported_file(path):
+                files.append(path)
+        return files
+
+    def _scan_directory(self, directory):
+        """掃描資料夾並回傳所有符合條件的檔案"""
+        valid_files = []
+        try:
+            for root, _, filenames in os.walk(directory):
+                for name in filenames:
+                    file_path = os.path.join(root, name)
+                    if self._is_supported_file(file_path):
+                        valid_files.append(file_path)
+        except Exception as exc:
+            print(f"掃描資料夾時發生錯誤：{exc}")
+        return valid_files
+
+    def _is_supported_file(self, file_path):
+        """判斷副檔名是否有效"""
+        if not os.path.isfile(file_path):
+            return False
+        _, ext = os.path.splitext(file_path)
+        return ext.lower() in self._image_extensions
+
+    def _set_drag_highlight(self, active):
+        """設定拖曳期間的視覺效果"""
+        if active:
+            self.grid_container.setStyleSheet(
+                """
+                QWidget {
+                    border: 2px dashed #3B82F6;
+                    border-radius: 12px;
+                    background-color: rgba(59, 130, 246, 0.08);
+                }
+                """
+            )
+        else:
+            self.grid_container.setStyleSheet("")
 
     def get_files(self):
         """取得所有檔案路徑"""

@@ -40,6 +40,7 @@ class ModernImageTool(QMainWindow):
     def __init__(self):
         super().__init__()
         self.current_theme = "light"  # 預設使用淺色主題
+        self._group_boxes = []
         self.setWindowTitle(f"🎨 {Config.APP_NAME} - 拖放+預覽增強版")
         self.resize(1100, 750)  # 更大的預設視窗（支援預覽網格）
         self.setMinimumSize(900, 650)
@@ -339,7 +340,8 @@ class ModernImageTool(QMainWindow):
     def _create_group_box(self, title):
         """建立群組框"""
         group = QGroupBox(title)
-        group.setStyleSheet(ModernStyle.get_card_style())
+        self._group_boxes.append(group)
+        group.setStyleSheet(ModernStyle.get_card_style(self.current_theme))
         return group
 
     def _create_actions(self):
@@ -381,6 +383,13 @@ class ModernImageTool(QMainWindow):
             self.setStyleSheet(ModernStyle.get_dark_stylesheet())
         else:
             self.setStyleSheet(ModernStyle.get_light_stylesheet())
+        self._refresh_group_box_styles()
+
+    def _refresh_group_box_styles(self):
+        """Refresh group box styling to match the active theme."""
+        card_style = ModernStyle.get_card_style(self.current_theme)
+        for group in self._group_boxes:
+            group.setStyleSheet(card_style)
 
     def _show_image_viewer(self, file_path):
         """顯示圖片檢視器"""

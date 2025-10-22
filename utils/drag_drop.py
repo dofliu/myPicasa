@@ -67,6 +67,13 @@ class DragDropListWidget(QListWidget):
             }
         """)
 
+    def dragMoveEvent(self, event):
+        """??????"""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
     def dropEvent(self, event: QDropEvent):
         """放下事件"""
         files = []

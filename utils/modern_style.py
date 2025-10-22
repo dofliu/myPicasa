@@ -576,25 +576,38 @@ class ModernStyle:
         """
 
     @classmethod
-    def get_card_style(cls):
-        """取得卡片樣式（用於群組框等）"""
-        return """
-            QGroupBox {
-                border: 2px solid #E2E8F0;
-                border-radius: 12px;
-                margin-top: 16px;
-                padding-top: 16px;
-                font-weight: bold;
-                background-color: white;
-            }
+    def get_card_style(cls, theme="light"):
+        """Return the card-like group box stylesheet for the given theme."""
+        colors = cls.DARK_THEME if theme == "dark" else cls.LIGHT_THEME
 
-            QGroupBox::title {
+        if theme == "dark":
+            border_color = "rgba(148, 163, 184, 0.45)"
+            title_background = "rgba(96, 165, 250, 0.22)"
+            title_color = colors['text']
+        else:
+            border_color = colors['border']
+            title_background = "rgba(59, 130, 246, 0.12)"
+            title_color = colors['primary']
+
+        return f"""
+            QGroupBox {{
+                border: 1px solid {border_color};
+                border-radius: 14px;
+                margin-top: 18px;
+                padding: 22px 18px 18px 18px;
+                font-weight: normal;
+                background-color: {colors['surface']};
+            }}
+
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 4px 12px;
-                background-color: #3B82F6;
-                color: white;
-                border-radius: 6px;
-                left: 20px;
-            }
+                padding: 4px 14px;
+                background-color: {title_background};
+                color: {title_color};
+                border-radius: 10px;
+                font-weight: 600;
+                left: 18px;
+                border: 1px solid {border_color};
+            }}
         """

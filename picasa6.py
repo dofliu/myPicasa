@@ -15,7 +15,8 @@ from PyQt5.QtWidgets import (
     QMessageBox, QTabWidget, QProgressBar, QGroupBox, QAction
 )
 from PyQt5.QtGui import QFont
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+import time
 from PIL import Image
 from moviepy.editor import VideoFileClip, concatenate_videoclips
 from natsort import natsorted
@@ -27,6 +28,242 @@ from utils import (
     merge_pdfs, get_pdf_info, check_dependencies, get_config_manager
 )
 from utils.modern_style import ModernStyle
+
+
+# === Worker Threads for Background Processing ===
+
+class VideoMergeWorker(QThread):
+    """影片合併工作執行緒"""
+    progress = pyqtSignal(int)  # 進度百分比
+    status = pyqtSignal(str)     # 狀態訊息
+    finished = pyqtSignal(bool, str)  # 完成(成功/失敗, 訊息)
+
+    def __init__(self, files, output_path):
+        super().__init__()
+        self.files = files
+        self.output_path = output_path
+        self.is_cancelled = False
+
+    def run(self):
+        try:
+            self.status.emit("正在載入影片檔案...")
+            self.progress.emit(5)
+
+            clips = []
+            total_files = len(self.files)
+
+            for i, file in enumerate(self.files):
+                if self.is_cancelled:
+                    self.cleanup_clips(clips)
+                    self.finished.emit(False, "操作已取消")
+                    return
+
+                self.status.emit(f"載入影片 {i+1}/{total_files}...")
+                clip = VideoFileClip(file)
+                clips.append(clip)
+                progress_pct = 5 + int((i + 1) / total_files * 25)
+                self.progress.emit(progress_pct)
+
+            if self.is_cancelled:
+                self.cleanup_clips(clips)
+                self.finished.emit(False, "操作已取消")
+                return
+
+            self.status.emit("正在合併影片...")
+            self.progress.emit(35)
+
+            final = concatenate_videoclips(clips, method="compose")
+
+            if self.is_cancelled:
+                self.cleanup_clips(clips)
+                final.close()
+                self.finished.emit(False, "操作已取消")
+                return
+
+            self.status.emit("正在輸出影片檔案...")
+
+            # 使用 logger 來追蹤進度
+            def progress_callback(current_frame, total_frames):
+                if self.is_cancelled:
+                    return
+                if total_frames > 0:
+                    progress_pct = 35 + int((current_frame / total_frames) * 60)
+                    self.progress.emit(min(progress_pct, 95))
+
+            final.write_videofile(
+                self.output_path,
+                codec=Config.VIDEO_CODEC,
+                audio_codec=Config.AUDIO_CODEC,
+                logger=None,  # 禁用 moviepy 的內建日誌
+                verbose=False
+            )
+
+            self.cleanup_clips(clips)
+            final.close()
+
+            if self.is_cancelled:
+                self.finished.emit(False, "操作已取消")
+            else:
+                self.progress.emit(100)
+                self.finished.emit(True, f"影片合併完成！\n{self.output_path}")
+
+        except Exception as e:
+            self.finished.emit(False, f"合併失敗：{str(e)}")
+
+    def cleanup_clips(self, clips):
+        """清理影片片段"""
+        for clip in clips:
+            try:
+                clip.close()
+            except:
+                pass
+
+    def cancel(self):
+        """取消操作"""
+        self.is_cancelled = True
+
+
+class GifCreationWorker(QThread):
+    """GIF 建立工作執行緒"""
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, files, output_path, duration, strategy):
+        super().__init__()
+        self.files = files
+        self.output_path = output_path
+        self.duration = duration
+        self.strategy = strategy
+        self.is_cancelled = False
+
+    def run(self):
+        try:
+            total = len(self.files)
+            self.status.emit(f"正在載入 {total} 個圖片...")
+            self.progress.emit(5)
+
+            # 載入圖片
+            images = []
+            for i, file in enumerate(self.files):
+                if self.is_cancelled:
+                    self.finished.emit(False, "操作已取消")
+                    return
+
+                self.status.emit(f"載入圖片 {i+1}/{total}...")
+                images.append(Image.open(file))
+                progress_pct = 5 + int((i + 1) / total * 30)
+                self.progress.emit(progress_pct)
+
+            if self.is_cancelled:
+                self.finished.emit(False, "操作已取消")
+                return
+
+            # 計算統一尺寸
+            self.status.emit("計算圖片尺寸...")
+            self.progress.emit(40)
+
+            min_w = min(img.width for img in images)
+            min_h = min(img.height for img in images)
+
+            # 調整大小
+            frames = []
+            for i, img in enumerate(images):
+                if self.is_cancelled:
+                    self.finished.emit(False, "操作已取消")
+                    return
+
+                self.status.emit(f"處理圖片 {i+1}/{total}...")
+                resized = resize_image(img, (min_w, min_h), self.strategy)
+                frames.append(resized)
+                progress_pct = 40 + int((i + 1) / total * 40)
+                self.progress.emit(progress_pct)
+
+            if self.is_cancelled:
+                self.finished.emit(False, "操作已取消")
+                return
+
+            # 儲存 GIF
+            self.status.emit("正在儲存 GIF...")
+            self.progress.emit(85)
+
+            frames[0].save(
+                self.output_path,
+                save_all=True,
+                append_images=frames[1:],
+                duration=self.duration,
+                loop=0
+            )
+
+            self.progress.emit(100)
+            self.finished.emit(True, f"GIF 建立完成！\n{self.output_path}")
+
+        except Exception as e:
+            self.finished.emit(False, f"建立 GIF 失敗：{str(e)}")
+
+    def cancel(self):
+        """取消操作"""
+        self.is_cancelled = True
+
+
+class ImageConversionWorker(QThread):
+    """圖片格式轉換工作執行緒"""
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, files, output_format, output_folder):
+        super().__init__()
+        self.files = files
+        self.output_format = output_format
+        self.output_folder = output_folder
+        self.is_cancelled = False
+
+    def run(self):
+        try:
+            total = len(self.files)
+            success_count = 0
+
+            # 建立輸出資料夾
+            if self.output_folder and not os.path.exists(self.output_folder):
+                os.makedirs(self.output_folder)
+
+            for i, file in enumerate(self.files):
+                if self.is_cancelled:
+                    self.finished.emit(False, f"操作已取消（已轉換 {success_count}/{total}）")
+                    return
+
+                try:
+                    self.status.emit(f"轉換 {i+1}/{total}: {os.path.basename(file)}")
+
+                    img = Image.open(file)
+                    base = os.path.splitext(os.path.basename(file))[0]
+
+                    if self.output_folder:
+                        save_path = os.path.join(self.output_folder, f"{base}.{self.output_format}")
+                    else:
+                        save_path = os.path.join(os.path.dirname(file), f"{base}.{self.output_format}")
+
+                    img.save(save_path, format=self.output_format.upper())
+                    success_count += 1
+
+                except Exception as e:
+                    print(f"轉換失敗：{file} - {e}")
+
+                progress_pct = int((i + 1) / total * 100)
+                self.progress.emit(progress_pct)
+
+            if success_count > 0:
+                self.finished.emit(True, f"成功轉換 {success_count}/{total} 個檔案！")
+            else:
+                self.finished.emit(False, "轉換失敗")
+
+        except Exception as e:
+            self.finished.emit(False, f"轉換過程發生錯誤：{str(e)}")
+
+    def cancel(self):
+        """取消操作"""
+        self.is_cancelled = True
 
 
 class MediaToolkit(QMainWindow):
@@ -46,6 +283,14 @@ class MediaToolkit(QMainWindow):
         # 從配置恢復視窗大小和位置
         self._restore_window_geometry()
         self.setMinimumSize(1000, 700)
+
+        # 工作執行緒
+        self.video_worker = None
+        self.gif_worker = None
+        self.convert_worker = None
+
+        # 時間追蹤
+        self.operation_start_time = None
 
         self.doc_deps = check_dependencies()
         self._init_ui()
@@ -178,24 +423,55 @@ class MediaToolkit(QMainWindow):
         params.setLayout(p_layout)
         layout.addWidget(params)
 
+        # GIF 進度顯示區域
+        self.gif_progress_widget = QWidget()
+        gif_progress_layout = QVBoxLayout(self.gif_progress_widget)
+        gif_progress_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.gif_status_label = QLabel("就緒")
+        self.gif_status_label.setStyleSheet("color: #64748B; font-size: 10pt;")
+        gif_progress_layout.addWidget(self.gif_status_label)
+
+        self.gif_progress = QProgressBar()
+        self.gif_progress.setTextVisible(True)
+        gif_progress_layout.addWidget(self.gif_progress)
+
+        self.gif_time_label = QLabel("")
+        self.gif_time_label.setStyleSheet("color: #64748B; font-size: 9pt;")
+        gif_progress_layout.addWidget(self.gif_time_label)
+
+        self.gif_progress_widget.setVisible(False)
+        layout.addWidget(self.gif_progress_widget)
+
         # 操作按鈕
         action_layout = QHBoxLayout()
         btn_merge = QPushButton("🖼️ 拼接圖片")
         btn_merge.clicked.connect(self.merge_images)
         btn_merge.setMinimumHeight(44)
         action_layout.addWidget(btn_merge)
-        
-        btn_gif = QPushButton("🎞️ 生成 GIF")
-        btn_gif.clicked.connect(self.create_gif)
-        btn_gif.setMinimumHeight(44)
-        action_layout.addWidget(btn_gif)
-        
+
+        self.btn_create_gif = QPushButton("🎞️ 生成 GIF")
+        self.btn_create_gif.clicked.connect(self.create_gif)
+        self.btn_create_gif.setMinimumHeight(44)
+        action_layout.addWidget(self.btn_create_gif)
+
         btn_watermark = QPushButton("🏷️ 添加浮水印")
         btn_watermark.clicked.connect(self._add_watermark)
         btn_watermark.setMinimumHeight(44)
         action_layout.addWidget(btn_watermark)
-        
+
         layout.addLayout(action_layout)
+
+        # GIF 取消按鈕
+        cancel_layout = QHBoxLayout()
+        self.btn_cancel_gif = QPushButton("❌ 取消 GIF 建立")
+        self.btn_cancel_gif.setProperty("secondary", True)
+        self.btn_cancel_gif.clicked.connect(self._cancel_gif_creation)
+        self.btn_cancel_gif.setMinimumHeight(40)
+        self.btn_cancel_gif.setVisible(False)
+        cancel_layout.addWidget(self.btn_cancel_gif)
+        layout.addLayout(cancel_layout)
+
         layout.addStretch()
         self.media_tabs.addTab(tab, "🖼️ 圖片處理")
 
@@ -228,15 +504,42 @@ class MediaToolkit(QMainWindow):
         out_layout.addWidget(self.edit_output_video)
         output_group.setLayout(out_layout)
         layout.addWidget(output_group)
-        
+
+        # 進度顯示區域
+        self.video_progress_widget = QWidget()
+        progress_layout = QVBoxLayout(self.video_progress_widget)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.video_status_label = QLabel("就緒")
+        self.video_status_label.setStyleSheet("color: #64748B; font-size: 10pt;")
+        progress_layout.addWidget(self.video_status_label)
+
         self.video_progress = QProgressBar()
-        self.video_progress.setVisible(False)
-        layout.addWidget(self.video_progress)
-        
-        btn_merge = QPushButton("🎬 合併影片")
-        btn_merge.clicked.connect(self.merge_videos)
-        btn_merge.setMinimumHeight(44)
-        layout.addWidget(btn_merge)
+        self.video_progress.setTextVisible(True)
+        progress_layout.addWidget(self.video_progress)
+
+        self.video_time_label = QLabel("")
+        self.video_time_label.setStyleSheet("color: #64748B; font-size: 9pt;")
+        progress_layout.addWidget(self.video_time_label)
+
+        self.video_progress_widget.setVisible(False)
+        layout.addWidget(self.video_progress_widget)
+
+        # 按鈕區域
+        btn_layout = QHBoxLayout()
+        self.btn_merge_video = QPushButton("🎬 合併影片")
+        self.btn_merge_video.clicked.connect(self.merge_videos)
+        self.btn_merge_video.setMinimumHeight(44)
+        btn_layout.addWidget(self.btn_merge_video)
+
+        self.btn_cancel_video = QPushButton("❌ 取消")
+        self.btn_cancel_video.setProperty("secondary", True)
+        self.btn_cancel_video.clicked.connect(self._cancel_video_merge)
+        self.btn_cancel_video.setMinimumHeight(44)
+        self.btn_cancel_video.setVisible(False)
+        btn_layout.addWidget(self.btn_cancel_video)
+
+        layout.addLayout(btn_layout)
         
         layout.addStretch()
         self.media_tabs.addTab(tab, "🎬 影片處理")
@@ -287,12 +590,43 @@ class MediaToolkit(QMainWindow):
         
         settings.setLayout(s_layout)
         layout.addWidget(settings)
-        
-        btn = QPushButton("✨ 開始轉換")
-        btn.clicked.connect(self.convert_images)
-        btn.setMinimumHeight(44)
-        layout.addWidget(btn)
-        
+
+        # 進度顯示區域
+        self.convert_progress_widget = QWidget()
+        convert_progress_layout = QVBoxLayout(self.convert_progress_widget)
+        convert_progress_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.convert_status_label = QLabel("就緒")
+        self.convert_status_label.setStyleSheet("color: #64748B; font-size: 10pt;")
+        convert_progress_layout.addWidget(self.convert_status_label)
+
+        self.convert_progress = QProgressBar()
+        self.convert_progress.setTextVisible(True)
+        convert_progress_layout.addWidget(self.convert_progress)
+
+        self.convert_time_label = QLabel("")
+        self.convert_time_label.setStyleSheet("color: #64748B; font-size: 9pt;")
+        convert_progress_layout.addWidget(self.convert_time_label)
+
+        self.convert_progress_widget.setVisible(False)
+        layout.addWidget(self.convert_progress_widget)
+
+        # 按鈕區域
+        btn_layout = QHBoxLayout()
+        self.btn_convert = QPushButton("✨ 開始轉換")
+        self.btn_convert.clicked.connect(self.convert_images)
+        self.btn_convert.setMinimumHeight(44)
+        btn_layout.addWidget(self.btn_convert)
+
+        self.btn_cancel_convert = QPushButton("❌ 取消")
+        self.btn_cancel_convert.setProperty("secondary", True)
+        self.btn_cancel_convert.clicked.connect(self._cancel_conversion)
+        self.btn_cancel_convert.setMinimumHeight(44)
+        self.btn_cancel_convert.setVisible(False)
+        btn_layout.addWidget(self.btn_cancel_convert)
+
+        layout.addLayout(btn_layout)
+
         layout.addStretch()
         self.media_tabs.addTab(tab, "🔄 格式轉換")
 
@@ -485,6 +819,34 @@ class MediaToolkit(QMainWindow):
         self.config.save_config()
         event.accept()
 
+    # === 輔助方法 ===
+    def _format_time(self, seconds):
+        """格式化時間顯示"""
+        if seconds < 60:
+            return f"{int(seconds)} 秒"
+        elif seconds < 3600:
+            mins = int(seconds / 60)
+            secs = int(seconds % 60)
+            return f"{mins} 分 {secs} 秒"
+        else:
+            hours = int(seconds / 3600)
+            mins = int((seconds % 3600) / 60)
+            return f"{hours} 小時 {mins} 分"
+
+    def _update_time_label(self, label, progress):
+        """更新時間標籤"""
+        if self.operation_start_time and progress > 0:
+            elapsed = time.time() - self.operation_start_time
+            if progress < 100:
+                estimated_total = elapsed / (progress / 100)
+                remaining = estimated_total - elapsed
+                label.setText(
+                    f"已用時間: {self._format_time(elapsed)} | "
+                    f"預估剩餘: {self._format_time(remaining)}"
+                )
+            else:
+                label.setText(f"完成！總用時: {self._format_time(elapsed)}")
+
     # === 圖片影像處理方法 ===
     def _show_image_viewer(self, path):
         dialog = ImageViewerDialog(path, self)
@@ -573,6 +935,7 @@ class MediaToolkit(QMainWindow):
             self.show_info(f"拼接完成！\n{path}")
 
     def create_gif(self):
+        """GIF 建立 - 使用工作執行緒"""
         files = self.image_preview.get_files()
         if not files:
             self.show_warning("請先選擇圖片")
@@ -581,19 +944,65 @@ class MediaToolkit(QMainWindow):
             duration = int(self.edit_duration.text())
         except:
             duration = Config.DEFAULT_GIF_DURATION
-        
-        images = [Image.open(p) for p in files]
-        min_w = min(img.width for img in images)
-        min_h = min(img.height for img in images)
+
         strategy = self.combo_strategy.currentText()
-        frames = [resize_image(img, (min_w, min_h), strategy) for img in images]
-        
+
+        # 詢問儲存路徑
         path, _ = QFileDialog.getSaveFileName(self, "儲存 GIF", "", Config.get_save_gif_filter())
-        if path:
-            frames[0].save(path, save_all=True, append_images=frames[1:], duration=duration, loop=0)
-            self.show_info(f"GIF 建立完成！\n{path}")
+        if not path:
+            return
+
+        # 初始化工作執行緒
+        self.gif_worker = GifCreationWorker(files, path, duration, strategy)
+        self.gif_worker.progress.connect(self._on_gif_progress)
+        self.gif_worker.status.connect(self._on_gif_status)
+        self.gif_worker.finished.connect(self._on_gif_finished)
+
+        # 顯示進度介面
+        self.gif_progress_widget.setVisible(True)
+        self.gif_progress.setValue(0)
+        self.btn_create_gif.setEnabled(False)
+        self.btn_cancel_gif.setVisible(True)
+
+        # 開始計時
+        self.operation_start_time = time.time()
+
+        # 啟動執行緒
+        self.gif_worker.start()
+
+    def _on_gif_progress(self, value):
+        """更新 GIF 建立進度"""
+        self.gif_progress.setValue(value)
+        self._update_time_label(self.gif_time_label, value)
+
+    def _on_gif_status(self, status):
+        """更新 GIF 建立狀態"""
+        self.gif_status_label.setText(status)
+
+    def _on_gif_finished(self, success, message):
+        """GIF 建立完成"""
+        self.gif_progress_widget.setVisible(False)
+        self.btn_create_gif.setEnabled(True)
+        self.btn_cancel_gif.setVisible(False)
+        self.operation_start_time = None
+
+        if success:
+            self.show_info(message)
+        else:
+            if "取消" not in message:
+                self.show_error(message)
+            else:
+                self.statusBar().showMessage(f"⚠️ {message}", 3000)
+
+    def _cancel_gif_creation(self):
+        """取消 GIF 建立"""
+        if self.gif_worker and self.gif_worker.isRunning():
+            self.gif_status_label.setText("正在取消操作...")
+            self.gif_worker.cancel()
+            self.btn_cancel_gif.setEnabled(False)
 
     def merge_videos(self):
+        """影片合併 - 使用工作執行緒"""
         files = self.video_files_list.get_all_files()
         if not files:
             self.show_warning("請先選擇影片")
@@ -602,51 +1011,116 @@ class MediaToolkit(QMainWindow):
         if not output:
             self.show_warning("請輸入輸出檔名")
             return
-        
+
         files = natsorted(files)
-        clips = [VideoFileClip(f) for f in files]
-        
-        self.video_progress.setVisible(True)
-        self.video_progress.setRange(0, 0)
-        
-        try:
-            final = concatenate_videoclips(clips, method="compose")
-            final.write_videofile(output, codec=Config.VIDEO_CODEC, audio_codec=Config.AUDIO_CODEC)
-            self.show_info(f"影片合併完成！\n{output}")
-        except Exception as e:
-            self.show_error(f"合併失敗：{e}")
-        finally:
-            for clip in clips:
-                clip.close()
-            self.video_progress.setVisible(False)
+
+        # 初始化工作執行緒
+        self.video_worker = VideoMergeWorker(files, output)
+        self.video_worker.progress.connect(self._on_video_progress)
+        self.video_worker.status.connect(self._on_video_status)
+        self.video_worker.finished.connect(self._on_video_finished)
+
+        # 顯示進度介面
+        self.video_progress_widget.setVisible(True)
+        self.video_progress.setValue(0)
+        self.btn_merge_video.setEnabled(False)
+        self.btn_cancel_video.setVisible(True)
+
+        # 開始計時
+        self.operation_start_time = time.time()
+
+        # 啟動執行緒
+        self.video_worker.start()
+
+    def _on_video_progress(self, value):
+        """更新影片合併進度"""
+        self.video_progress.setValue(value)
+        self._update_time_label(self.video_time_label, value)
+
+    def _on_video_status(self, status):
+        """更新影片合併狀態"""
+        self.video_status_label.setText(status)
+
+    def _on_video_finished(self, success, message):
+        """影片合併完成"""
+        self.video_progress_widget.setVisible(False)
+        self.btn_merge_video.setEnabled(True)
+        self.btn_cancel_video.setVisible(False)
+        self.operation_start_time = None
+
+        if success:
+            self.show_info(message)
+        else:
+            if "取消" not in message:
+                self.show_error(message)
+            else:
+                self.statusBar().showMessage(f"⚠️ {message}", 3000)
+
+    def _cancel_video_merge(self):
+        """取消影片合併"""
+        if self.video_worker and self.video_worker.isRunning():
+            self.video_status_label.setText("正在取消操作...")
+            self.video_worker.cancel()
+            self.btn_cancel_video.setEnabled(False)
 
     def convert_images(self):
+        """圖片格式轉換 - 使用工作執行緒"""
         files = self.convert_list.get_all_files()
         if not files:
             self.show_warning("請先選擇圖片")
             return
-        
+
         fmt = self.combo_output_format.currentText().lower()
         folder = self.edit_output_folder.text()
-        if folder and not os.path.exists(folder):
-            os.makedirs(folder)
-        
-        count = 0
-        for file in files:
-            try:
-                img = Image.open(file)
-                base = os.path.splitext(os.path.basename(file))[0]
-                if folder:
-                    save_path = os.path.join(folder, f"{base}.{fmt}")
-                else:
-                    save_path = os.path.join(os.path.dirname(file), f"{base}.{fmt}")
-                img.save(save_path, format=fmt.upper())
-                count += 1
-            except Exception as e:
-                print(f"轉換失敗：{file} - {e}")
-        
-        if count > 0:
-            self.show_info(f"成功轉換 {count} 個檔案！")
+
+        # 初始化工作執行緒
+        self.convert_worker = ImageConversionWorker(files, fmt, folder)
+        self.convert_worker.progress.connect(self._on_convert_progress)
+        self.convert_worker.status.connect(self._on_convert_status)
+        self.convert_worker.finished.connect(self._on_convert_finished)
+
+        # 顯示進度介面
+        self.convert_progress_widget.setVisible(True)
+        self.convert_progress.setValue(0)
+        self.btn_convert.setEnabled(False)
+        self.btn_cancel_convert.setVisible(True)
+
+        # 開始計時
+        self.operation_start_time = time.time()
+
+        # 啟動執行緒
+        self.convert_worker.start()
+
+    def _on_convert_progress(self, value):
+        """更新圖片轉換進度"""
+        self.convert_progress.setValue(value)
+        self._update_time_label(self.convert_time_label, value)
+
+    def _on_convert_status(self, status):
+        """更新圖片轉換狀態"""
+        self.convert_status_label.setText(status)
+
+    def _on_convert_finished(self, success, message):
+        """圖片轉換完成"""
+        self.convert_progress_widget.setVisible(False)
+        self.btn_convert.setEnabled(True)
+        self.btn_cancel_convert.setVisible(False)
+        self.operation_start_time = None
+
+        if success:
+            self.show_info(message)
+        else:
+            if "取消" not in message:
+                self.show_error(message)
+            else:
+                self.statusBar().showMessage(f"⚠️ {message}", 3000)
+
+    def _cancel_conversion(self):
+        """取消圖片轉換"""
+        if self.convert_worker and self.convert_worker.isRunning():
+            self.convert_status_label.setText("正在取消操作...")
+            self.convert_worker.cancel()
+            self.btn_cancel_convert.setEnabled(False)
 
     # === 文檔處理方法 ===
     def _browse_word(self):

@@ -9,6 +9,10 @@ from .preview_widget import ImagePreviewGrid, ImageViewerDialog
 from .batch_rename import batch_rename_files
 from .image_editor import edit_image, batch_edit_images
 from .watermark import add_watermark
+from .doc_converter import (
+    convert_word_to_pdf, convert_pdf_to_word, merge_pdfs,
+    get_pdf_info, check_dependencies
+)
 
 __all__ = [
     'resize_with_padding',
@@ -22,5 +26,10 @@ __all__ = [
     'batch_rename_files',
     'edit_image',
     'batch_edit_images',
-    'add_watermark'
+    'add_watermark',
+    'convert_word_to_pdf',
+    'convert_pdf_to_word',
+    'merge_pdfs',
+    'get_pdf_info',
+    'check_dependencies'
 ]

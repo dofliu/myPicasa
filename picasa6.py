@@ -688,29 +688,80 @@ class MediaToolkit(QMainWindow):
         """PDF 合併分頁"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        
+
         group = self._create_group_box("📁 選擇 PDF 文件")
-        file_layout = QVBoxLayout()
-        
+        file_layout = QHBoxLayout()
+
+        # 左側：PDF 列表
+        list_layout = QVBoxLayout()
+
         btn_layout = QHBoxLayout()
         btn = QPushButton("📂 選擇 PDF")
         btn.clicked.connect(self._select_pdfs)
         btn.setMinimumHeight(40)
         btn_layout.addWidget(btn)
         btn_layout.addStretch()
-        file_layout.addLayout(btn_layout)
-        
+        list_layout.addLayout(btn_layout)
+
         self.pdf_list = DragDropListWidget(file_extensions=['.pdf'])
         self.pdf_list.files_dropped.connect(self._on_pdf_dropped)
-        file_layout.addWidget(self.pdf_list)
+        list_layout.addWidget(self.pdf_list)
+
+        file_layout.addLayout(list_layout, 4)
+
+        # 右側：控制按鈕
+        control_layout = QVBoxLayout()
+
+        btn_move_up = QPushButton("⬆️ 上移")
+        btn_move_up.clicked.connect(self._pdf_move_up)
+        btn_move_up.setProperty("secondary", True)
+        control_layout.addWidget(btn_move_up)
+
+        btn_move_down = QPushButton("⬇️ 下移")
+        btn_move_down.clicked.connect(self._pdf_move_down)
+        btn_move_down.setProperty("secondary", True)
+        control_layout.addWidget(btn_move_down)
+
+        control_layout.addSpacing(10)
+
+        btn_remove = QPushButton("🗑️ 刪除")
+        btn_remove.clicked.connect(self._pdf_remove_selected)
+        btn_remove.setProperty("secondary", True)
+        control_layout.addWidget(btn_remove)
+
+        btn_clear = QPushButton("🧹 清空")
+        btn_clear.clicked.connect(self._pdf_clear_all)
+        btn_clear.setProperty("secondary", True)
+        control_layout.addWidget(btn_clear)
+
+        control_layout.addStretch()
+        file_layout.addLayout(control_layout, 1)
+
         group.setLayout(file_layout)
         layout.addWidget(group)
-        
+
+        # 合併選項
+        options_group = self._create_group_box("⚙️ 合併選項")
+        options_layout = QVBoxLayout()
+
+        from PyQt5.QtWidgets import QCheckBox
+
+        self.pdf_add_toc = QCheckBox("添加目錄頁面（列出所有 PDF 檔名）")
+        self.pdf_add_toc.setChecked(False)
+        options_layout.addWidget(self.pdf_add_toc)
+
+        self.pdf_add_page_numbers = QCheckBox("添加頁碼（底部居中）")
+        self.pdf_add_page_numbers.setChecked(False)
+        options_layout.addWidget(self.pdf_add_page_numbers)
+
+        options_group.setLayout(options_layout)
+        layout.addWidget(options_group)
+
         btn = QPushButton("🔗 合併 PDF")
         btn.clicked.connect(self._merge_pdfs)
         btn.setMinimumHeight(44)
         layout.addWidget(btn)
-        
+
         layout.addStretch()
         self.doc_tabs.addTab(tab, "🔗 PDF 合併")
 
@@ -1162,6 +1213,40 @@ class MediaToolkit(QMainWindow):
         if files:
             self.pdf_list.add_files(files)
 
+    def _pdf_move_up(self):
+        """上移選中的 PDF"""
+        current_row = self.pdf_list.currentRow()
+        if current_row > 0:
+            item = self.pdf_list.takeItem(current_row)
+            self.pdf_list.insertItem(current_row - 1, item)
+            self.pdf_list.setCurrentRow(current_row - 1)
+
+    def _pdf_move_down(self):
+        """下移選中的 PDF"""
+        current_row = self.pdf_list.currentRow()
+        if current_row < self.pdf_list.count() - 1 and current_row >= 0:
+            item = self.pdf_list.takeItem(current_row)
+            self.pdf_list.insertItem(current_row + 1, item)
+            self.pdf_list.setCurrentRow(current_row + 1)
+
+    def _pdf_remove_selected(self):
+        """刪除選中的 PDF"""
+        current_row = self.pdf_list.currentRow()
+        if current_row >= 0:
+            self.pdf_list.takeItem(current_row)
+
+    def _pdf_clear_all(self):
+        """清空所有 PDF"""
+        if self.pdf_list.count() > 0:
+            reply = QMessageBox.question(
+                self,
+                "確認清空",
+                "確定要清空所有 PDF 文件嗎？",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.pdf_list.clear_all()
+
     def _merge_pdfs(self):
         files = self.pdf_list.get_all_files()
         if not files:
@@ -1169,7 +1254,10 @@ class MediaToolkit(QMainWindow):
             return
         output, _ = QFileDialog.getSaveFileName(self, "儲存 PDF", "", "PDF (*.pdf)")
         if output:
-            if merge_pdfs(files, output):
+            add_toc = self.pdf_add_toc.isChecked()
+            add_page_numbers = self.pdf_add_page_numbers.isChecked()
+
+            if merge_pdfs(files, output, add_toc=add_toc, add_page_numbers=add_page_numbers):
                 self.show_info(f"合併成功！\n{output}")
             else:
                 self.show_error("PDF 合併失敗")

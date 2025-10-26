@@ -236,9 +236,20 @@ def merge_pdfs(pdf_files, output_path, add_toc=False, add_page_numbers=False):
         print("錯誤: 缺少 pypdf 套件")
         return False
 
+    if not HAS_REPORTLAB:
+        if add_toc or add_page_numbers:
+            print("警告: 缺少 reportlab 套件，無法添加目錄或頁碼")
+            add_toc = False
+            add_page_numbers = False
+
     try:
         print(f"開始合併 {len(pdf_files)} 個 PDF 文件...")
 
+        # 如果需要添加目錄或頁碼，使用更複雜的流程
+        if add_toc or add_page_numbers:
+            return _merge_pdfs_with_extras(pdf_files, output_path, add_toc, add_page_numbers)
+
+        # 簡單合併
         merger = pypdf.PdfWriter()
 
         for pdf_file in pdf_files:
@@ -263,6 +274,225 @@ def merge_pdfs(pdf_files, output_path, add_toc=False, add_page_numbers=False):
     except Exception as e:
         print(f"PDF 合併失敗: {str(e)}")
         return False
+
+
+def _merge_pdfs_with_extras(pdf_files, output_path, add_toc, add_page_numbers):
+    """
+    合併 PDF 並添加目錄和/或頁碼
+
+    Args:
+        pdf_files: PDF 文件路徑列表
+        output_path: 輸出路徑
+        add_toc: 是否添加目錄
+        add_page_numbers: 是否添加頁碼
+
+    Returns:
+        bool: 是否成功
+    """
+    import tempfile
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    try:
+        # 設定中文字型
+        font_name = setup_fonts()
+
+        # 收集所有 PDF 資訊
+        pdf_info_list = []
+        total_pages = 0
+
+        for pdf_file in pdf_files:
+            if not os.path.exists(pdf_file):
+                print(f"警告: 文件不存在: {pdf_file}")
+                continue
+
+            try:
+                reader = pypdf.PdfReader(pdf_file)
+                page_count = len(reader.pages)
+                pdf_info_list.append({
+                    'path': pdf_file,
+                    'name': os.path.basename(pdf_file),
+                    'reader': reader,
+                    'page_count': page_count,
+                    'start_page': total_pages + 1  # 如果有目錄，這個會調整
+                })
+                total_pages += page_count
+                print(f"✓ 已讀取: {os.path.basename(pdf_file)} ({page_count} 頁)")
+            except Exception as e:
+                print(f"✗ 無法讀取: {os.path.basename(pdf_file)} - {e}")
+
+        if not pdf_info_list:
+            print("錯誤: 沒有有效的 PDF 文件")
+            return False
+
+        # 創建臨時文件
+        temp_files = []
+
+        # 1. 如果需要，生成目錄頁面
+        toc_path = None
+        if add_toc:
+            toc_path = tempfile.mktemp(suffix='.pdf')
+            temp_files.append(toc_path)
+            _create_toc_page(toc_path, pdf_info_list, font_name)
+
+            # 調整頁碼（目錄佔 1 頁）
+            for info in pdf_info_list:
+                info['start_page'] += 1
+
+        # 2. 如果需要添加頁碼，為每個 PDF 添加頁碼
+        if add_page_numbers:
+            processed_pdfs = []
+            current_page = 1 if not add_toc else 2  # 目錄是第 1 頁
+
+            for info in pdf_info_list:
+                temp_pdf = tempfile.mktemp(suffix='.pdf')
+                temp_files.append(temp_pdf)
+                _add_page_numbers_to_pdf(
+                    info['path'],
+                    temp_pdf,
+                    start_number=current_page,
+                    font_name=font_name
+                )
+                processed_pdfs.append(temp_pdf)
+                current_page += info['page_count']
+
+            # 使用添加了頁碼的 PDF
+            pdf_paths_to_merge = processed_pdfs
+        else:
+            pdf_paths_to_merge = [info['path'] for info in pdf_info_list]
+
+        # 3. 合併所有 PDF
+        merger = pypdf.PdfWriter()
+
+        # 先添加目錄
+        if toc_path:
+            toc_reader = pypdf.PdfReader(toc_path)
+            for page in toc_reader.pages:
+                merger.add_page(page)
+
+        # 添加所有 PDF
+        for pdf_path in pdf_paths_to_merge:
+            reader = pypdf.PdfReader(pdf_path)
+            for page in reader.pages:
+                merger.add_page(page)
+
+        # 寫入輸出文件
+        with open(output_path, 'wb') as output_file:
+            merger.write(output_file)
+
+        # 清理臨時文件
+        for temp_file in temp_files:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except:
+                pass
+
+        print(f"合併完成: {output_path}")
+        return True
+
+    except Exception as e:
+        print(f"合併失敗: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def _create_toc_page(output_path, pdf_info_list, font_name):
+    """
+    創建目錄頁面
+
+    Args:
+        output_path: 輸出路徑
+        pdf_info_list: PDF 資訊列表
+        font_name: 字型名稱
+    """
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+
+    c = canvas.Canvas(output_path, pagesize=A4)
+    width, height = A4
+
+    # 標題
+    c.setFont(font_name, 24)
+    c.drawCentredString(width / 2, height - 80, "目錄 Table of Contents")
+
+    # 分隔線
+    c.setLineWidth(2)
+    c.line(50, height - 100, width - 50, height - 100)
+
+    # 列出所有 PDF
+    c.setFont(font_name, 12)
+    y = height - 140
+
+    for i, info in enumerate(pdf_info_list, 1):
+        if y < 100:  # 頁面空間不足時換頁
+            c.showPage()
+            c.setFont(font_name, 12)
+            y = height - 60
+
+        # 檔案名稱
+        text = f"{i}. {info['name']}"
+        c.drawString(80, y, text)
+
+        # 頁數資訊
+        page_info = f"{info['page_count']} 頁，第 {info['start_page']} 頁起"
+        c.drawRightString(width - 80, y, page_info)
+
+        y -= 25
+
+    c.save()
+
+
+def _add_page_numbers_to_pdf(input_path, output_path, start_number=1, font_name="Helvetica"):
+    """
+    為 PDF 添加頁碼
+
+    Args:
+        input_path: 輸入 PDF 路徑
+        output_path: 輸出 PDF 路徑
+        start_number: 起始頁碼
+        font_name: 字型名稱
+    """
+    import tempfile
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+
+    reader = pypdf.PdfReader(input_path)
+    writer = pypdf.PdfWriter()
+
+    for i, page in enumerate(reader.pages):
+        # 創建頁碼水印
+        temp_pdf = tempfile.mktemp(suffix='.pdf')
+
+        # 獲取頁面尺寸
+        page_width = float(page.mediabox.width)
+        page_height = float(page.mediabox.height)
+
+        c = canvas.Canvas(temp_pdf, pagesize=(page_width, page_height))
+        c.setFont(font_name, 10)
+
+        # 底部居中頁碼
+        page_number = start_number + i
+        c.drawCentredString(page_width / 2, 30, str(page_number))
+
+        c.save()
+
+        # 合併頁碼到原始頁面
+        overlay_reader = pypdf.PdfReader(temp_pdf)
+        page.merge_page(overlay_reader.pages[0])
+        writer.add_page(page)
+
+        # 清理臨時文件
+        try:
+            os.remove(temp_pdf)
+        except:
+            pass
+
+    with open(output_path, 'wb') as output_file:
+        writer.write(output_file)
 
 
 def to_roman(num):

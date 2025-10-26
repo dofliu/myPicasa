@@ -272,84 +272,180 @@ class VideoToGifWorker(QThread):
     status = pyqtSignal(str)
     finished = pyqtSignal(bool, str)
 
-    def __init__(self, video_path, output_path, start_time, end_time, fps, resize_width):
+    def __init__(self, video_path, output_path, mode, start_time=0, end_time=0, fps=10,
+                 resize_width=0, sample_interval=10, frame_duration=500):
         super().__init__()
         self.video_path = video_path
         self.output_path = output_path
+        self.mode = mode  # 'continuous' 或 'sampling'
         self.start_time = start_time
         self.end_time = end_time
         self.fps = fps
         self.resize_width = resize_width
+        self.sample_interval = sample_interval  # 採樣間隔（秒）
+        self.frame_duration = frame_duration    # 每幀停留時間（毫秒）
         self.is_cancelled = False
 
     def run(self):
         try:
-            self.status.emit("正在載入影片...")
-            self.progress.emit(5)
+            if self.mode == 'continuous':
+                self._run_continuous_mode()
+            else:
+                self._run_sampling_mode()
+        except Exception as e:
+            self.finished.emit(False, f"轉換失敗：{str(e)}")
 
-            clip = VideoFileClip(self.video_path)
+    def _run_continuous_mode(self):
+        """連續模式：截取時間範圍，生成流暢動畫"""
+        self.status.emit("正在載入影片...")
+        self.progress.emit(5)
 
+        clip = VideoFileClip(self.video_path)
+
+        if self.is_cancelled:
+            clip.close()
+            self.finished.emit(False, "操作已取消")
+            return
+
+        # 截取時間範圍
+        duration = clip.duration
+        start = max(0, self.start_time)
+        end = min(duration, self.end_time) if self.end_time > 0 else duration
+
+        if start >= end:
+            clip.close()
+            self.finished.emit(False, "起始時間必須小於結束時間")
+            return
+
+        self.status.emit(f"截取片段：{start:.1f}s - {end:.1f}s")
+        self.progress.emit(15)
+
+        subclip = clip.subclip(start, end)
+
+        if self.is_cancelled:
+            subclip.close()
+            clip.close()
+            self.finished.emit(False, "操作已取消")
+            return
+
+        # 調整大小
+        if self.resize_width and self.resize_width > 0:
+            self.status.emit("調整影片尺寸...")
+            self.progress.emit(25)
+            subclip = subclip.resize(width=self.resize_width)
+
+        if self.is_cancelled:
+            subclip.close()
+            clip.close()
+            self.finished.emit(False, "操作已取消")
+            return
+
+        # 轉換為 GIF
+        self.status.emit("正在生成 GIF（可能需要一些時間）...")
+        self.progress.emit(40)
+
+        subclip.write_gif(
+            self.output_path,
+            fps=self.fps,
+            program='ffmpeg',
+            opt='nq',
+            logger=None
+        )
+
+        self.progress.emit(100)
+        clip.close()
+
+        if self.is_cancelled:
+            self.finished.emit(False, "操作已取消")
+        else:
+            file_size = os.path.getsize(self.output_path) / (1024 * 1024)
+            self.finished.emit(True, f"GIF 生成完成！\n{self.output_path}\n檔案大小：{file_size:.2f} MB")
+
+    def _run_sampling_mode(self):
+        """採樣模式：每隔 N 秒取一幀"""
+        self.status.emit("正在載入影片...")
+        self.progress.emit(5)
+
+        clip = VideoFileClip(self.video_path)
+
+        if self.is_cancelled:
+            clip.close()
+            self.finished.emit(False, "操作已取消")
+            return
+
+        duration = clip.duration
+
+        # 計算採樣點
+        sample_times = []
+        current_time = 0
+        while current_time < duration:
+            sample_times.append(current_time)
+            current_time += self.sample_interval
+
+        total_frames = len(sample_times)
+        self.status.emit(f"將從影片中採樣 {total_frames} 幀...")
+        self.progress.emit(10)
+
+        if total_frames == 0:
+            clip.close()
+            self.finished.emit(False, "採樣間隔過大，無法產生幀")
+            return
+
+        # 逐一採樣
+        frames = []
+        for i, sample_time in enumerate(sample_times):
             if self.is_cancelled:
                 clip.close()
                 self.finished.emit(False, "操作已取消")
                 return
 
-            # 截取時間範圍
-            duration = clip.duration
-            start = max(0, self.start_time)
-            end = min(duration, self.end_time) if self.end_time > 0 else duration
+            self.status.emit(f"採樣第 {i+1}/{total_frames} 幀（{sample_time:.1f}秒）...")
 
-            if start >= end:
-                clip.close()
-                self.finished.emit(False, "起始時間必須小於結束時間")
-                return
+            # 取得該時間點的幀
+            frame = clip.get_frame(sample_time)
 
-            self.status.emit(f"截取片段：{start:.1f}s - {end:.1f}s")
-            self.progress.emit(15)
-
-            subclip = clip.subclip(start, end)
-
-            if self.is_cancelled:
-                subclip.close()
-                clip.close()
-                self.finished.emit(False, "操作已取消")
-                return
+            # 轉換為 PIL Image
+            from PIL import Image as PILImage
+            import numpy as np
+            pil_image = PILImage.fromarray(np.uint8(frame))
 
             # 調整大小
             if self.resize_width and self.resize_width > 0:
-                self.status.emit("調整影片尺寸...")
-                self.progress.emit(25)
-                subclip = subclip.resize(width=self.resize_width)
+                aspect_ratio = pil_image.height / pil_image.width
+                new_height = int(self.resize_width * aspect_ratio)
+                pil_image = pil_image.resize((self.resize_width, new_height), PILImage.Resampling.LANCZOS)
 
-            if self.is_cancelled:
-                subclip.close()
-                clip.close()
-                self.finished.emit(False, "操作已取消")
-                return
+            frames.append(pil_image)
 
-            # 轉換為 GIF
-            self.status.emit("正在生成 GIF（可能需要一些時間）...")
-            self.progress.emit(40)
+            progress = 10 + int((i + 1) / total_frames * 70)
+            self.progress.emit(progress)
 
-            subclip.write_gif(
-                self.output_path,
-                fps=self.fps,
-                program='ffmpeg',
-                opt='nq',
-                logger=None
-            )
+        clip.close()
 
-            self.progress.emit(100)
-            clip.close()
+        if self.is_cancelled:
+            self.finished.emit(False, "操作已取消")
+            return
 
-            if self.is_cancelled:
-                self.finished.emit(False, "操作已取消")
-            else:
-                file_size = os.path.getsize(self.output_path) / (1024 * 1024)
-                self.finished.emit(True, f"GIF 生成完成！\n{self.output_path}\n檔案大小：{file_size:.2f} MB")
+        # 儲存為 GIF
+        self.status.emit("正在儲存 GIF...")
+        self.progress.emit(85)
 
-        except Exception as e:
-            self.finished.emit(False, f"轉換失敗：{str(e)}")
+        frames[0].save(
+            self.output_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=self.frame_duration,
+            loop=0,
+            optimize=True
+        )
+
+        self.progress.emit(100)
+
+        file_size = os.path.getsize(self.output_path) / (1024 * 1024)
+        self.finished.emit(True,
+            f"GIF 生成完成！\n{self.output_path}\n"
+            f"總幀數：{total_frames}\n"
+            f"檔案大小：{file_size:.2f} MB")
 
     def cancel(self):
         """取消操作"""
@@ -858,9 +954,31 @@ class MediaToolkit(QMainWindow):
         group.setLayout(file_layout)
         layout.addWidget(group)
 
-        # 參數設定
-        params = self._create_group_box("⚙️ 轉換參數")
-        p_layout = QVBoxLayout()
+        # 模式選擇
+        mode_group = self._create_group_box("🎯 轉換模式")
+        mode_layout = QVBoxLayout()
+
+        from PyQt5.QtWidgets import QRadioButton, QButtonGroup
+
+        self.gif_mode_group = QButtonGroup()
+
+        self.gif_mode_continuous = QRadioButton("連續模式 - 流暢動畫（截取時間範圍）")
+        self.gif_mode_continuous.setChecked(True)
+        self.gif_mode_continuous.toggled.connect(self._on_gif_mode_changed)
+        self.gif_mode_group.addButton(self.gif_mode_continuous)
+        mode_layout.addWidget(self.gif_mode_continuous)
+
+        self.gif_mode_sampling = QRadioButton("採樣模式 - 縮時效果（每隔 N 秒取一幀）")
+        self.gif_mode_sampling.toggled.connect(self._on_gif_mode_changed)
+        self.gif_mode_group.addButton(self.gif_mode_sampling)
+        mode_layout.addWidget(self.gif_mode_sampling)
+
+        mode_group.setLayout(mode_layout)
+        layout.addWidget(mode_group)
+
+        # 連續模式參數
+        self.continuous_params = self._create_group_box("⚙️ 連續模式參數")
+        cp_layout = QVBoxLayout()
 
         # 時間範圍
         time_layout = QHBoxLayout()
@@ -875,25 +993,65 @@ class MediaToolkit(QMainWindow):
         self.gif_end_time.setPlaceholderText("0=完整影片")
         time_layout.addWidget(self.gif_end_time)
         time_layout.addStretch()
-        p_layout.addLayout(time_layout)
+        cp_layout.addLayout(time_layout)
 
-        # FPS 和尺寸
+        # FPS
         fps_layout = QHBoxLayout()
         fps_layout.addWidget(QLabel("幀率 (FPS):"))
         self.gif_fps = QLineEdit("10")
         self.gif_fps.setMaximumWidth(80)
         fps_layout.addWidget(self.gif_fps)
+        fps_layout.addWidget(QLabel("（建議 8-15）"))
+        fps_layout.addStretch()
+        cp_layout.addLayout(fps_layout)
 
-        fps_layout.addWidget(QLabel("寬度 (像素):"))
+        self.continuous_params.setLayout(cp_layout)
+        layout.addWidget(self.continuous_params)
+
+        # 採樣模式參數
+        self.sampling_params = self._create_group_box("⚙️ 採樣模式參數")
+        sp_layout = QVBoxLayout()
+
+        # 採樣間隔
+        interval_layout = QHBoxLayout()
+        interval_layout.addWidget(QLabel("採樣間隔 (秒):"))
+        self.gif_sample_interval = QLineEdit("10")
+        self.gif_sample_interval.setMaximumWidth(100)
+        interval_layout.addWidget(self.gif_sample_interval)
+        interval_layout.addWidget(QLabel("（每隔幾秒取一幀）"))
+        interval_layout.addStretch()
+        sp_layout.addLayout(interval_layout)
+
+        # 每幀停留時間
+        duration_layout = QHBoxLayout()
+        duration_layout.addWidget(QLabel("每幀停留時間 (毫秒):"))
+        self.gif_frame_duration = QLineEdit("500")
+        self.gif_frame_duration.setMaximumWidth(100)
+        duration_layout.addWidget(self.gif_frame_duration)
+        duration_layout.addWidget(QLabel("（建議 300-1000）"))
+        duration_layout.addStretch()
+        sp_layout.addLayout(duration_layout)
+
+        self.sampling_params.setLayout(sp_layout)
+        self.sampling_params.setVisible(False)  # 預設隱藏
+        layout.addWidget(self.sampling_params)
+
+        # 共用參數
+        common_params = self._create_group_box("🔧 共用參數")
+        common_layout = QVBoxLayout()
+
+        width_layout = QHBoxLayout()
+        width_layout.addWidget(QLabel("寬度 (像素):"))
         self.gif_width = QLineEdit("0")
         self.gif_width.setMaximumWidth(100)
         self.gif_width.setPlaceholderText("0=原始大小")
-        fps_layout.addWidget(self.gif_width)
-        fps_layout.addStretch()
-        p_layout.addLayout(fps_layout)
+        width_layout.addWidget(self.gif_width)
+        width_layout.addWidget(QLabel("（建議 480-640）"))
+        width_layout.addStretch()
+        common_layout.addLayout(width_layout)
 
-        params.setLayout(p_layout)
-        layout.addWidget(params)
+        common_params.setLayout(common_layout)
+        layout.addWidget(common_params)
 
         # 進度顯示
         self.v2g_progress_widget = QWidget()
@@ -1709,6 +1867,12 @@ class MediaToolkit(QMainWindow):
         if file:
             self.video_to_gif_path.setText(file)
 
+    def _on_gif_mode_changed(self):
+        """模式切換時更新 UI"""
+        is_continuous = self.gif_mode_continuous.isChecked()
+        self.continuous_params.setVisible(is_continuous)
+        self.sampling_params.setVisible(not is_continuous)
+
     def _start_video_to_gif(self):
         """開始影片轉 GIF"""
         video_path = self.video_to_gif_path.text()
@@ -1716,18 +1880,52 @@ class MediaToolkit(QMainWindow):
             self.show_warning("請先選擇有效的影片檔案")
             return
 
+        # 判斷模式
+        is_continuous = self.gif_mode_continuous.isChecked()
+        mode = 'continuous' if is_continuous else 'sampling'
+
+        # 共用參數
         try:
-            start_time = float(self.gif_start_time.text())
-            end_time = float(self.gif_end_time.text())
-            fps = int(self.gif_fps.text())
             width = int(self.gif_width.text()) if self.gif_width.text() else 0
         except ValueError:
-            self.show_warning("請輸入有效的數字參數")
+            self.show_warning("請輸入有效的寬度數字")
             return
 
-        if fps < 1 or fps > 30:
-            self.show_warning("FPS 必須在 1-30 之間")
-            return
+        # 模式特定參數
+        if is_continuous:
+            try:
+                start_time = float(self.gif_start_time.text())
+                end_time = float(self.gif_end_time.text())
+                fps = int(self.gif_fps.text())
+            except ValueError:
+                self.show_warning("請輸入有效的數字參數")
+                return
+
+            if fps < 1 or fps > 30:
+                self.show_warning("FPS 必須在 1-30 之間")
+                return
+
+            sample_interval = 10  # 預設值，連續模式不使用
+            frame_duration = 500  # 預設值，連續模式不使用
+        else:
+            try:
+                sample_interval = float(self.gif_sample_interval.text())
+                frame_duration = int(self.gif_frame_duration.text())
+            except ValueError:
+                self.show_warning("請輸入有效的數字參數")
+                return
+
+            if sample_interval <= 0:
+                self.show_warning("採樣間隔必須大於 0")
+                return
+
+            if frame_duration < 100 or frame_duration > 5000:
+                self.show_warning("每幀停留時間建議在 100-5000 毫秒之間")
+                return
+
+            start_time = 0  # 預設值，採樣模式不使用
+            end_time = 0    # 預設值，採樣模式不使用
+            fps = 10        # 預設值，採樣模式不使用
 
         # 詢問儲存路徑
         output_path, _ = QFileDialog.getSaveFileName(self, "儲存 GIF", "", "GIF (*.gif)")
@@ -1736,7 +1934,15 @@ class MediaToolkit(QMainWindow):
 
         # 初始化工作執行緒
         self.video_to_gif_worker = VideoToGifWorker(
-            video_path, output_path, start_time, end_time, fps, width
+            video_path=video_path,
+            output_path=output_path,
+            mode=mode,
+            start_time=start_time,
+            end_time=end_time,
+            fps=fps,
+            resize_width=width,
+            sample_interval=sample_interval,
+            frame_duration=frame_duration
         )
         self.video_to_gif_worker.progress.connect(self._on_v2g_progress)
         self.video_to_gif_worker.status.connect(self._on_v2g_status)

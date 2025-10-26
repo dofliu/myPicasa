@@ -266,6 +266,205 @@ class ImageConversionWorker(QThread):
         self.is_cancelled = True
 
 
+class VideoToGifWorker(QThread):
+    """影片轉 GIF 工作執行緒"""
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, video_path, output_path, start_time, end_time, fps, resize_width):
+        super().__init__()
+        self.video_path = video_path
+        self.output_path = output_path
+        self.start_time = start_time
+        self.end_time = end_time
+        self.fps = fps
+        self.resize_width = resize_width
+        self.is_cancelled = False
+
+    def run(self):
+        try:
+            self.status.emit("正在載入影片...")
+            self.progress.emit(5)
+
+            clip = VideoFileClip(self.video_path)
+
+            if self.is_cancelled:
+                clip.close()
+                self.finished.emit(False, "操作已取消")
+                return
+
+            # 截取時間範圍
+            duration = clip.duration
+            start = max(0, self.start_time)
+            end = min(duration, self.end_time) if self.end_time > 0 else duration
+
+            if start >= end:
+                clip.close()
+                self.finished.emit(False, "起始時間必須小於結束時間")
+                return
+
+            self.status.emit(f"截取片段：{start:.1f}s - {end:.1f}s")
+            self.progress.emit(15)
+
+            subclip = clip.subclip(start, end)
+
+            if self.is_cancelled:
+                subclip.close()
+                clip.close()
+                self.finished.emit(False, "操作已取消")
+                return
+
+            # 調整大小
+            if self.resize_width and self.resize_width > 0:
+                self.status.emit("調整影片尺寸...")
+                self.progress.emit(25)
+                subclip = subclip.resize(width=self.resize_width)
+
+            if self.is_cancelled:
+                subclip.close()
+                clip.close()
+                self.finished.emit(False, "操作已取消")
+                return
+
+            # 轉換為 GIF
+            self.status.emit("正在生成 GIF（可能需要一些時間）...")
+            self.progress.emit(40)
+
+            subclip.write_gif(
+                self.output_path,
+                fps=self.fps,
+                program='ffmpeg',
+                opt='nq',
+                logger=None
+            )
+
+            self.progress.emit(100)
+            clip.close()
+
+            if self.is_cancelled:
+                self.finished.emit(False, "操作已取消")
+            else:
+                file_size = os.path.getsize(self.output_path) / (1024 * 1024)
+                self.finished.emit(True, f"GIF 生成完成！\n{self.output_path}\n檔案大小：{file_size:.2f} MB")
+
+        except Exception as e:
+            self.finished.emit(False, f"轉換失敗：{str(e)}")
+
+    def cancel(self):
+        """取消操作"""
+        self.is_cancelled = True
+
+
+class ImageCompressionWorker(QThread):
+    """圖片壓縮工作執行緒"""
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    stats = pyqtSignal(str)  # 壓縮統計資訊
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, files, quality, output_format, output_folder):
+        super().__init__()
+        self.files = files
+        self.quality = quality
+        self.output_format = output_format
+        self.output_folder = output_folder
+        self.is_cancelled = False
+
+    def run(self):
+        try:
+            total = len(self.files)
+            success_count = 0
+            original_size = 0
+            compressed_size = 0
+
+            # 建立輸出資料夾
+            if self.output_folder and not os.path.exists(self.output_folder):
+                os.makedirs(self.output_folder)
+
+            for i, file in enumerate(self.files):
+                if self.is_cancelled:
+                    self.finished.emit(False, f"操作已取消（已壓縮 {success_count}/{total}）")
+                    return
+
+                try:
+                    self.status.emit(f"壓縮 {i+1}/{total}: {os.path.basename(file)}")
+
+                    # 獲取原始檔案大小
+                    orig_size = os.path.getsize(file)
+                    original_size += orig_size
+
+                    img = Image.open(file)
+
+                    # 如果是 PNG 且目標是 JPG，需要轉換模式
+                    if self.output_format.lower() in ['jpg', 'jpeg'] and img.mode in ('RGBA', 'LA', 'P'):
+                        # 創建白色背景
+                        background = Image.new('RGB', img.size, (255, 255, 255))
+                        if img.mode == 'P':
+                            img = img.convert('RGBA')
+                        background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+                        img = background
+
+                    base = os.path.splitext(os.path.basename(file))[0]
+
+                    if self.output_folder:
+                        save_path = os.path.join(self.output_folder, f"{base}_compressed.{self.output_format}")
+                    else:
+                        save_path = os.path.join(os.path.dirname(file), f"{base}_compressed.{self.output_format}")
+
+                    # 壓縮保存
+                    if self.output_format.lower() in ['jpg', 'jpeg']:
+                        img.save(save_path, format='JPEG', quality=self.quality, optimize=True)
+                    elif self.output_format.lower() == 'png':
+                        img.save(save_path, format='PNG', optimize=True, compress_level=9)
+                    elif self.output_format.lower() == 'webp':
+                        img.save(save_path, format='WEBP', quality=self.quality)
+                    else:
+                        img.save(save_path, quality=self.quality, optimize=True)
+
+                    # 獲取壓縮後檔案大小
+                    comp_size = os.path.getsize(save_path)
+                    compressed_size += comp_size
+
+                    success_count += 1
+
+                    # 計算節省百分比
+                    if orig_size > 0:
+                        saved_percent = ((orig_size - comp_size) / orig_size) * 100
+                        self.stats.emit(
+                            f"原始：{orig_size/1024:.1f} KB → "
+                            f"壓縮：{comp_size/1024:.1f} KB "
+                            f"（節省 {saved_percent:.1f}%）"
+                        )
+
+                except Exception as e:
+                    print(f"壓縮失敗：{file} - {e}")
+
+                progress_pct = int((i + 1) / total * 100)
+                self.progress.emit(progress_pct)
+
+            if success_count > 0:
+                total_saved = original_size - compressed_size
+                total_saved_percent = (total_saved / original_size * 100) if original_size > 0 else 0
+
+                message = (
+                    f"成功壓縮 {success_count}/{total} 個檔案！\n\n"
+                    f"原始總大小：{original_size/(1024*1024):.2f} MB\n"
+                    f"壓縮後大小：{compressed_size/(1024*1024):.2f} MB\n"
+                    f"節省空間：{total_saved/(1024*1024):.2f} MB ({total_saved_percent:.1f}%)"
+                )
+                self.finished.emit(True, message)
+            else:
+                self.finished.emit(False, "壓縮失敗")
+
+        except Exception as e:
+            self.finished.emit(False, f"壓縮過程發生錯誤：{str(e)}")
+
+    def cancel(self):
+        """取消操作"""
+        self.is_cancelled = True
+
+
 class MediaToolkit(QMainWindow):
     """多媒體與文檔處理工具套件"""
 
@@ -288,6 +487,8 @@ class MediaToolkit(QMainWindow):
         self.video_worker = None
         self.gif_worker = None
         self.convert_worker = None
+        self.video_to_gif_worker = None
+        self.compress_worker = None
 
         # 時間追蹤
         self.operation_start_time = None
@@ -343,6 +544,8 @@ class MediaToolkit(QMainWindow):
         self._create_image_tab()
         self._create_video_tab()
         self._create_convert_tab()
+        self._create_video_to_gif_tab()
+        self._create_image_compression_tab()
         media_layout.addWidget(self.media_tabs)
         
         # 文件轉換類別
@@ -629,6 +832,243 @@ class MediaToolkit(QMainWindow):
 
         layout.addStretch()
         self.media_tabs.addTab(tab, "🔄 格式轉換")
+
+    def _create_video_to_gif_tab(self):
+        """影片轉 GIF 分頁"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # 影片選擇
+        group = self._create_group_box("🎬 選擇影片檔案")
+        file_layout = QVBoxLayout()
+
+        btn_layout = QHBoxLayout()
+        btn = QPushButton("📂 選擇影片")
+        btn.clicked.connect(self._select_video_for_gif)
+        btn.setMinimumHeight(40)
+        btn_layout.addWidget(btn)
+        btn_layout.addStretch()
+        file_layout.addLayout(btn_layout)
+
+        self.video_to_gif_path = QLineEdit()
+        self.video_to_gif_path.setPlaceholderText("未選擇影片...")
+        self.video_to_gif_path.setReadOnly(True)
+        file_layout.addWidget(self.video_to_gif_path)
+
+        group.setLayout(file_layout)
+        layout.addWidget(group)
+
+        # 參數設定
+        params = self._create_group_box("⚙️ 轉換參數")
+        p_layout = QVBoxLayout()
+
+        # 時間範圍
+        time_layout = QHBoxLayout()
+        time_layout.addWidget(QLabel("起始時間 (秒):"))
+        self.gif_start_time = QLineEdit("0")
+        self.gif_start_time.setMaximumWidth(100)
+        time_layout.addWidget(self.gif_start_time)
+
+        time_layout.addWidget(QLabel("結束時間 (秒):"))
+        self.gif_end_time = QLineEdit("0")
+        self.gif_end_time.setMaximumWidth(100)
+        self.gif_end_time.setPlaceholderText("0=完整影片")
+        time_layout.addWidget(self.gif_end_time)
+        time_layout.addStretch()
+        p_layout.addLayout(time_layout)
+
+        # FPS 和尺寸
+        fps_layout = QHBoxLayout()
+        fps_layout.addWidget(QLabel("幀率 (FPS):"))
+        self.gif_fps = QLineEdit("10")
+        self.gif_fps.setMaximumWidth(80)
+        fps_layout.addWidget(self.gif_fps)
+
+        fps_layout.addWidget(QLabel("寬度 (像素):"))
+        self.gif_width = QLineEdit("0")
+        self.gif_width.setMaximumWidth(100)
+        self.gif_width.setPlaceholderText("0=原始大小")
+        fps_layout.addWidget(self.gif_width)
+        fps_layout.addStretch()
+        p_layout.addLayout(fps_layout)
+
+        params.setLayout(p_layout)
+        layout.addWidget(params)
+
+        # 進度顯示
+        self.v2g_progress_widget = QWidget()
+        v2g_progress_layout = QVBoxLayout(self.v2g_progress_widget)
+        v2g_progress_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.v2g_status_label = QLabel("就緒")
+        self.v2g_status_label.setStyleSheet("color: #64748B; font-size: 10pt;")
+        v2g_progress_layout.addWidget(self.v2g_status_label)
+
+        self.v2g_progress = QProgressBar()
+        self.v2g_progress.setTextVisible(True)
+        v2g_progress_layout.addWidget(self.v2g_progress)
+
+        self.v2g_time_label = QLabel("")
+        self.v2g_time_label.setStyleSheet("color: #64748B; font-size: 9pt;")
+        v2g_progress_layout.addWidget(self.v2g_time_label)
+
+        self.v2g_progress_widget.setVisible(False)
+        layout.addWidget(self.v2g_progress_widget)
+
+        # 按鈕
+        btn_layout = QHBoxLayout()
+        self.btn_video_to_gif = QPushButton("✨ 生成 GIF")
+        self.btn_video_to_gif.clicked.connect(self._start_video_to_gif)
+        self.btn_video_to_gif.setMinimumHeight(44)
+        btn_layout.addWidget(self.btn_video_to_gif)
+
+        self.btn_cancel_v2g = QPushButton("❌ 取消")
+        self.btn_cancel_v2g.setProperty("secondary", True)
+        self.btn_cancel_v2g.clicked.connect(self._cancel_video_to_gif)
+        self.btn_cancel_v2g.setMinimumHeight(44)
+        self.btn_cancel_v2g.setVisible(False)
+        btn_layout.addWidget(self.btn_cancel_v2g)
+
+        layout.addLayout(btn_layout)
+
+        layout.addStretch()
+        self.media_tabs.addTab(tab, "🎞️ 影片轉GIF")
+
+    def _create_image_compression_tab(self):
+        """圖片壓縮分頁"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # 檔案選擇
+        group = self._create_group_box("📁 選擇圖片檔案")
+        file_layout = QVBoxLayout()
+
+        btn_layout = QHBoxLayout()
+        btn = QPushButton("📂 選擇圖片")
+        btn.clicked.connect(self._select_images_for_compression)
+        btn.setMinimumHeight(40)
+        btn_layout.addWidget(btn)
+        btn_layout.addStretch()
+        file_layout.addLayout(btn_layout)
+
+        exts = ['.jpg', '.jpeg', '.png', '.bmp', '.webp']
+        self.compress_list = DragDropListWidget(file_extensions=exts)
+        self.compress_list.files_dropped.connect(self._on_compress_dropped)
+        file_layout.addWidget(self.compress_list)
+
+        group.setLayout(file_layout)
+        layout.addWidget(group)
+
+        # 壓縮設定
+        settings = self._create_group_box("🗜️ 壓縮設定")
+        s_layout = QVBoxLayout()
+
+        # 品質滑桿
+        from PyQt5.QtWidgets import QSlider
+        quality_layout = QHBoxLayout()
+        quality_layout.addWidget(QLabel("品質:"))
+
+        self.compress_quality_slider = QSlider(Qt.Horizontal)
+        self.compress_quality_slider.setMinimum(1)
+        self.compress_quality_slider.setMaximum(100)
+        self.compress_quality_slider.setValue(75)
+        self.compress_quality_slider.valueChanged.connect(self._update_quality_label)
+        quality_layout.addWidget(self.compress_quality_slider)
+
+        self.compress_quality_label = QLabel("75")
+        self.compress_quality_label.setMinimumWidth(40)
+        self.compress_quality_label.setStyleSheet("font-weight: bold;")
+        quality_layout.addWidget(self.compress_quality_label)
+        s_layout.addLayout(quality_layout)
+
+        # 快速設定按鈕
+        preset_layout = QHBoxLayout()
+        preset_layout.addWidget(QLabel("快速設定:"))
+
+        btn_high = QPushButton("高品質 (90)")
+        btn_high.setProperty("secondary", True)
+        btn_high.clicked.connect(lambda: self.compress_quality_slider.setValue(90))
+        preset_layout.addWidget(btn_high)
+
+        btn_balanced = QPushButton("平衡 (75)")
+        btn_balanced.setProperty("secondary", True)
+        btn_balanced.clicked.connect(lambda: self.compress_quality_slider.setValue(75))
+        preset_layout.addWidget(btn_balanced)
+
+        btn_small = QPushButton("小檔案 (60)")
+        btn_small.setProperty("secondary", True)
+        btn_small.clicked.connect(lambda: self.compress_quality_slider.setValue(60))
+        preset_layout.addWidget(btn_small)
+
+        preset_layout.addStretch()
+        s_layout.addLayout(preset_layout)
+
+        # 輸出格式
+        fmt_layout = QHBoxLayout()
+        fmt_layout.addWidget(QLabel("輸出格式:"))
+        self.compress_format = QComboBox()
+        self.compress_format.addItems(['jpg', 'png', 'webp'])
+        fmt_layout.addWidget(self.compress_format)
+        fmt_layout.addStretch()
+        s_layout.addLayout(fmt_layout)
+
+        # 輸出資料夾
+        folder_layout = QHBoxLayout()
+        folder_layout.addWidget(QLabel("輸出資料夾:"))
+        self.compress_output_folder = QLineEdit("compressed_images")
+        folder_layout.addWidget(self.compress_output_folder)
+        btn_browse = QPushButton("📂 瀏覽")
+        btn_browse.setProperty("secondary", True)
+        btn_browse.clicked.connect(self._browse_compress_folder)
+        folder_layout.addWidget(btn_browse)
+        s_layout.addLayout(folder_layout)
+
+        settings.setLayout(s_layout)
+        layout.addWidget(settings)
+
+        # 壓縮統計
+        self.compress_stats_label = QLabel("")
+        self.compress_stats_label.setStyleSheet("color: #64748B; font-size: 9pt;")
+        layout.addWidget(self.compress_stats_label)
+
+        # 進度顯示
+        self.compress_progress_widget = QWidget()
+        compress_progress_layout = QVBoxLayout(self.compress_progress_widget)
+        compress_progress_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.compress_status_label = QLabel("就緒")
+        self.compress_status_label.setStyleSheet("color: #64748B; font-size: 10pt;")
+        compress_progress_layout.addWidget(self.compress_status_label)
+
+        self.compress_progress = QProgressBar()
+        self.compress_progress.setTextVisible(True)
+        compress_progress_layout.addWidget(self.compress_progress)
+
+        self.compress_time_label = QLabel("")
+        self.compress_time_label.setStyleSheet("color: #64748B; font-size: 9pt;")
+        compress_progress_layout.addWidget(self.compress_time_label)
+
+        self.compress_progress_widget.setVisible(False)
+        layout.addWidget(self.compress_progress_widget)
+
+        # 按鈕
+        btn_layout = QHBoxLayout()
+        self.btn_compress = QPushButton("🗜️ 開始壓縮")
+        self.btn_compress.clicked.connect(self._start_compression)
+        self.btn_compress.setMinimumHeight(44)
+        btn_layout.addWidget(self.btn_compress)
+
+        self.btn_cancel_compress = QPushButton("❌ 取消")
+        self.btn_cancel_compress.setProperty("secondary", True)
+        self.btn_cancel_compress.clicked.connect(self._cancel_compression)
+        self.btn_cancel_compress.setMinimumHeight(44)
+        self.btn_cancel_compress.setVisible(False)
+        btn_layout.addWidget(self.btn_cancel_compress)
+
+        layout.addLayout(btn_layout)
+
+        layout.addStretch()
+        self.media_tabs.addTab(tab, "🗜️ 圖片壓縮")
 
     def _create_word_pdf_tab(self):
         """Word/PDF 轉換分頁"""
@@ -1261,6 +1701,176 @@ class MediaToolkit(QMainWindow):
                 self.show_info(f"合併成功！\n{output}")
             else:
                 self.show_error("PDF 合併失敗")
+
+    # === 影片轉 GIF 方法 ===
+    def _select_video_for_gif(self):
+        """選擇影片檔案"""
+        file, _ = QFileDialog.getOpenFileName(self, "選擇影片", "", Config.VIDEO_FILE_FILTER)
+        if file:
+            self.video_to_gif_path.setText(file)
+
+    def _start_video_to_gif(self):
+        """開始影片轉 GIF"""
+        video_path = self.video_to_gif_path.text()
+        if not video_path or not os.path.exists(video_path):
+            self.show_warning("請先選擇有效的影片檔案")
+            return
+
+        try:
+            start_time = float(self.gif_start_time.text())
+            end_time = float(self.gif_end_time.text())
+            fps = int(self.gif_fps.text())
+            width = int(self.gif_width.text()) if self.gif_width.text() else 0
+        except ValueError:
+            self.show_warning("請輸入有效的數字參數")
+            return
+
+        if fps < 1 or fps > 30:
+            self.show_warning("FPS 必須在 1-30 之間")
+            return
+
+        # 詢問儲存路徑
+        output_path, _ = QFileDialog.getSaveFileName(self, "儲存 GIF", "", "GIF (*.gif)")
+        if not output_path:
+            return
+
+        # 初始化工作執行緒
+        self.video_to_gif_worker = VideoToGifWorker(
+            video_path, output_path, start_time, end_time, fps, width
+        )
+        self.video_to_gif_worker.progress.connect(self._on_v2g_progress)
+        self.video_to_gif_worker.status.connect(self._on_v2g_status)
+        self.video_to_gif_worker.finished.connect(self._on_v2g_finished)
+
+        # 顯示進度介面
+        self.v2g_progress_widget.setVisible(True)
+        self.v2g_progress.setValue(0)
+        self.btn_video_to_gif.setEnabled(False)
+        self.btn_cancel_v2g.setVisible(True)
+
+        # 開始計時
+        self.operation_start_time = time.time()
+
+        # 啟動執行緒
+        self.video_to_gif_worker.start()
+
+    def _on_v2g_progress(self, value):
+        """更新影片轉 GIF 進度"""
+        self.v2g_progress.setValue(value)
+        self._update_time_label(self.v2g_time_label, value)
+
+    def _on_v2g_status(self, status):
+        """更新影片轉 GIF 狀態"""
+        self.v2g_status_label.setText(status)
+
+    def _on_v2g_finished(self, success, message):
+        """影片轉 GIF 完成"""
+        self.v2g_progress_widget.setVisible(False)
+        self.btn_video_to_gif.setEnabled(True)
+        self.btn_cancel_v2g.setVisible(False)
+        self.operation_start_time = None
+
+        if success:
+            self.show_info(message)
+        else:
+            if "取消" not in message:
+                self.show_error(message)
+            else:
+                self.statusBar().showMessage(f"⚠️ {message}", 3000)
+
+    def _cancel_video_to_gif(self):
+        """取消影片轉 GIF"""
+        if self.video_to_gif_worker and self.video_to_gif_worker.isRunning():
+            self.v2g_status_label.setText("正在取消操作...")
+            self.video_to_gif_worker.cancel()
+            self.btn_cancel_v2g.setEnabled(False)
+
+    # === 圖片壓縮方法 ===
+    def _select_images_for_compression(self):
+        """選擇圖片進行壓縮"""
+        files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", "", Config.IMAGE_FILE_FILTER)
+        if files:
+            self.compress_list.add_files(files)
+
+    def _on_compress_dropped(self, files):
+        """拖放圖片到壓縮列表"""
+        self.compress_list.add_files(files)
+
+    def _update_quality_label(self, value):
+        """更新品質標籤"""
+        self.compress_quality_label.setText(str(value))
+
+    def _browse_compress_folder(self):
+        """瀏覽輸出資料夾"""
+        folder = QFileDialog.getExistingDirectory(self, "選擇輸出資料夾")
+        if folder:
+            self.compress_output_folder.setText(folder)
+
+    def _start_compression(self):
+        """開始壓縮圖片"""
+        files = self.compress_list.get_all_files()
+        if not files:
+            self.show_warning("請先選擇圖片")
+            return
+
+        quality = self.compress_quality_slider.value()
+        output_format = self.compress_format.currentText()
+        output_folder = self.compress_output_folder.text()
+
+        # 初始化工作執行緒
+        self.compress_worker = ImageCompressionWorker(files, quality, output_format, output_folder)
+        self.compress_worker.progress.connect(self._on_compress_progress)
+        self.compress_worker.status.connect(self._on_compress_status)
+        self.compress_worker.stats.connect(self._on_compress_stats)
+        self.compress_worker.finished.connect(self._on_compress_finished)
+
+        # 顯示進度介面
+        self.compress_progress_widget.setVisible(True)
+        self.compress_progress.setValue(0)
+        self.compress_stats_label.setText("")
+        self.btn_compress.setEnabled(False)
+        self.btn_cancel_compress.setVisible(True)
+
+        # 開始計時
+        self.operation_start_time = time.time()
+
+        # 啟動執行緒
+        self.compress_worker.start()
+
+    def _on_compress_progress(self, value):
+        """更新圖片壓縮進度"""
+        self.compress_progress.setValue(value)
+        self._update_time_label(self.compress_time_label, value)
+
+    def _on_compress_status(self, status):
+        """更新圖片壓縮狀態"""
+        self.compress_status_label.setText(status)
+
+    def _on_compress_stats(self, stats):
+        """更新壓縮統計資訊"""
+        self.compress_stats_label.setText(stats)
+
+    def _on_compress_finished(self, success, message):
+        """圖片壓縮完成"""
+        self.compress_progress_widget.setVisible(False)
+        self.btn_compress.setEnabled(True)
+        self.btn_cancel_compress.setVisible(False)
+        self.operation_start_time = None
+
+        if success:
+            self.show_info(message)
+        else:
+            if "取消" not in message:
+                self.show_error(message)
+            else:
+                self.statusBar().showMessage(f"⚠️ {message}", 3000)
+
+    def _cancel_compression(self):
+        """取消圖片壓縮"""
+        if self.compress_worker and self.compress_worker.isRunning():
+            self.compress_status_label.setText("正在取消操作...")
+            self.compress_worker.cancel()
+            self.btn_cancel_compress.setEnabled(False)
 
     def show_about(self):
         QMessageBox.about(self, "關於 MediaToolkit",

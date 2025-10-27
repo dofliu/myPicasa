@@ -46,6 +46,13 @@ except ImportError:
     print("警告: reportlab 未安裝，PDF 目錄和頁碼功能將受限")
 
 
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+    print("警告: Pillow 未安裝，圖片轉 PDF 功能將受到限制。")
+
 def check_dependencies():
     """檢查依賴項是否已安裝"""
     return {
@@ -108,6 +115,78 @@ def setup_fonts():
 
 # 初始化字型
 CHINESE_FONT = setup_fonts()
+
+PDF_EXTENSIONS = {'.pdf'}
+WORD_EXTENSIONS = {'.doc', '.docx'}
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff'}
+
+
+class PasswordRequiredError(Exception):
+    """Raised when an encrypted PDF requires a password but no password was provided."""
+
+
+class WrongPasswordProvided(Exception):
+    """Raised when the provided PDF password is incorrect."""
+
+
+def detect_file_type(file_path):
+    """Return file category: pdf/word/image/unknown."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in PDF_EXTENSIONS:
+        return 'pdf'
+    if ext in WORD_EXTENSIONS:
+        return 'word'
+    if ext in IMAGE_EXTENSIONS:
+        return 'image'
+    return 'unknown'
+
+
+def convert_image_to_pdf(image_path, pdf_path):
+    """Convert a single image to PDF."""
+    if not HAS_PIL:
+        print("Error: Pillow is not installed, cannot convert image to PDF.")
+        return False
+    try:
+        with Image.open(image_path) as img:
+            if img.mode not in ("RGB", "CMYK"):
+                img = img.convert("RGB")
+            img.save(pdf_path, "PDF")
+        return os.path.exists(pdf_path)
+    except Exception as exc:
+        print(f"Image to PDF failed: {exc}")
+        return False
+
+
+def _write_reader_to_temp(reader):
+    fd, temp_path = tempfile.mkstemp(suffix='.pdf')
+    os.close(fd)
+    writer = pypdf.PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    with open(temp_path, 'wb') as output_file:
+        writer.write(output_file)
+    return temp_path
+
+
+def ensure_unlocked_pdf(pdf_path, password=None):
+    """Ensure a PDF can be read; returns (path_to_use, temp_path_or_None)."""
+    if not HAS_PYPDF:
+        raise RuntimeError("pypdf is required to handle encrypted PDFs")
+    reader = pypdf.PdfReader(pdf_path)
+    if not reader.is_encrypted:
+        return pdf_path, None
+    try:
+        if reader.decrypt('') == 1:
+            temp_pdf = _write_reader_to_temp(reader)
+            return temp_pdf, temp_pdf
+    except WrongPasswordError:
+        pass
+    if password is None:
+        raise PasswordRequiredError(pdf_path)
+    if reader.decrypt(password) != 1:
+        raise WrongPasswordProvided(pdf_path)
+    temp_pdf = _write_reader_to_temp(reader)
+    return temp_pdf, temp_pdf
 
 
 def convert_word_to_pdf(word_path, pdf_path):
@@ -186,38 +265,42 @@ def convert_word_to_pdf(word_path, pdf_path):
     return False
 
 
-def convert_pdf_to_word(pdf_path, word_path):
+def convert_pdf_to_word(pdf_path, word_path, password=None):
     """
-    將 PDF 轉換為 Word 文件
-
-    Args:
-        pdf_path: PDF 文件路徑
-        word_path: 輸出 Word 路徑
-
-    Returns:
-        bool: 是否轉換成功
+    將 PDF 轉換為 Word 檔案。
     """
     if not HAS_PDF2DOCX:
         print("錯誤: 缺少 pdf2docx 套件")
         return False
 
+    temp_pdf = None
     try:
+        source_pdf, temp_pdf = ensure_unlocked_pdf(pdf_path, password=password)
         print(f"開始轉換: {pdf_path} -> {word_path}")
 
-        cv = Converter(pdf_path)
+        cv = Converter(source_pdf)
         cv.convert(word_path, start=0, end=None)
         cv.close()
 
         if os.path.exists(word_path) and os.path.getsize(word_path) > 0:
-            print("PDF 轉 Word 成功!")
+            print("PDF 轉 Word 完成!")
             return True
         else:
             print("PDF 轉 Word 失敗: 輸出檔案為空")
             return False
+    except PasswordRequiredError:
+        raise
+    except WrongPasswordProvided:
+        raise
     except Exception as e:
         print(f"PDF 轉 Word 失敗: {str(e)}")
         return False
-
+    finally:
+        if temp_pdf and os.path.exists(temp_pdf):
+            try:
+                os.remove(temp_pdf)
+            except Exception:
+                pass
 
 def merge_pdfs(pdf_files, output_path, add_toc=False, add_page_numbers=False):
     """

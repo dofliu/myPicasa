@@ -67,9 +67,11 @@ class ImageThumbnail(QFrame):
         self.info_label.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         layout.addWidget(self.info_label)
 
-        # 刪除按鈕
+        # 刪除按鈕（固定置於右上角，確保可點擊）
         self.remove_btn = QPushButton("✕")
         self.remove_btn.setFixedSize(24, 24)
+        self.remove_btn.setCursor(Qt.PointingHandCursor)
+        self.remove_btn.setFocusPolicy(Qt.NoFocus)
         self.remove_btn.setStyleSheet("""
             QPushButton {
                 background-color: #EF4444;
@@ -77,6 +79,7 @@ class ImageThumbnail(QFrame):
                 border-radius: 12px;
                 font-weight: bold;
                 font-size: 12pt;
+                padding: 0;
             }
             QPushButton:hover {
                 background-color: #DC2626;
@@ -84,6 +87,11 @@ class ImageThumbnail(QFrame):
         """)
         self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self.file_path))
         self.remove_btn.hide()  # 預設隱藏
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.addStretch()
+        button_row.addWidget(self.remove_btn)
+        layout.insertLayout(0, button_row)
 
         # 設定樣式
         self.setStyleSheet("""

@@ -69,6 +69,13 @@ class ConfigManager:
                 "last_folder": ""
             },
 
+            # 圖片壓縮參數
+            "compression": {
+                "output_folder": "compressed_images",
+                "output_format": "jpg",
+                "last_folder": ""
+            },
+
             # 文檔處理參數
             "document": {
                 "last_word_folder": "",

@@ -11,7 +11,9 @@ from .image_editor import edit_image, batch_edit_images
 from .watermark import add_watermark
 from .doc_converter import (
     convert_word_to_pdf, convert_pdf_to_word, merge_pdfs,
-    get_pdf_info, check_dependencies
+    get_pdf_info, check_dependencies, convert_image_to_pdf,
+    detect_file_type, ensure_unlocked_pdf,
+    PasswordRequiredError, WrongPasswordProvided
 )
 from .config_manager import ConfigManager, get_config_manager
 
@@ -33,6 +35,11 @@ __all__ = [
     'merge_pdfs',
     'get_pdf_info',
     'check_dependencies',
+    'convert_image_to_pdf',
+    'detect_file_type',
+    'ensure_unlocked_pdf',
+    'PasswordRequiredError',
+    'WrongPasswordProvided',
     'ConfigManager',
     'get_config_manager'
 ]

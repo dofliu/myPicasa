@@ -12,11 +12,12 @@ import os
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QListWidget, QComboBox, QFileDialog,
-    QMessageBox, QTabWidget, QProgressBar, QGroupBox, QAction
+    QMessageBox, QTabWidget, QProgressBar, QGroupBox, QAction, QInputDialog
 )
 from PyQt5.QtGui import QFont
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 import time
+import tempfile
 from PIL import Image
 from moviepy.editor import VideoFileClip, concatenate_videoclips
 from natsort import natsorted
@@ -25,9 +26,15 @@ from utils import (
     resize_with_padding, resize_image, Config,
     DragDropListWidget, ImagePreviewGrid, ImageViewerDialog,
     add_watermark, convert_word_to_pdf, convert_pdf_to_word,
-    merge_pdfs, get_pdf_info, check_dependencies, get_config_manager
+    merge_pdfs, get_pdf_info, check_dependencies, get_config_manager,
+    convert_image_to_pdf, detect_file_type, ensure_unlocked_pdf,
+    PasswordRequiredError, WrongPasswordProvided
 )
 from utils.modern_style import ModernStyle
+
+
+class PasswordPromptCancelled(Exception):
+    """User cancelled PDF password entry."""
 
 
 # === Worker Threads for Background Processing ===
@@ -569,6 +576,11 @@ class MediaToolkit(QMainWindow):
 
         # 載入配置管理器
         self.config = get_config_manager()
+        self._pdf_password_cache = {}
+        self._loading_preferences = False
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self.config.save_config)
 
         # 從配置載入設定
         self.current_theme = self.config.get('theme', 'light')
@@ -696,10 +708,16 @@ class MediaToolkit(QMainWindow):
         grid_layout.addWidget(QLabel("列數:"))
         self.edit_cols = QLineEdit(str(Config.DEFAULT_GRID_COLS))
         self.edit_cols.setMaximumWidth(80)
+        self.edit_cols.editingFinished.connect(
+            lambda: self._on_numeric_pref_changed(self.edit_cols, 'image.grid_cols', 1, Config.DEFAULT_GRID_COLS)
+        )
         grid_layout.addWidget(self.edit_cols)
         grid_layout.addWidget(QLabel("行數:"))
         self.edit_rows = QLineEdit(str(Config.DEFAULT_GRID_ROWS))
         self.edit_rows.setMaximumWidth(80)
+        self.edit_rows.editingFinished.connect(
+            lambda: self._on_numeric_pref_changed(self.edit_rows, 'image.grid_rows', 1, Config.DEFAULT_GRID_ROWS)
+        )
         grid_layout.addWidget(self.edit_rows)
         grid_layout.addStretch()
         p_layout.addLayout(grid_layout)
@@ -708,6 +726,9 @@ class MediaToolkit(QMainWindow):
         strategy_layout.addWidget(QLabel("縮放策略:"))
         self.combo_strategy = QComboBox()
         self.combo_strategy.addItems(Config.RESIZE_STRATEGIES)
+        self.combo_strategy.currentTextChanged.connect(
+            lambda text: self._on_combo_pref_changed('image.resize_strategy', text)
+        )
         strategy_layout.addWidget(self.combo_strategy)
         strategy_layout.addStretch()
         p_layout.addLayout(strategy_layout)
@@ -716,12 +737,28 @@ class MediaToolkit(QMainWindow):
         gif_layout.addWidget(QLabel("GIF 持續時間 (ms):"))
         self.edit_duration = QLineEdit(str(Config.DEFAULT_GIF_DURATION))
         self.edit_duration.setMaximumWidth(100)
+        self.edit_duration.editingFinished.connect(
+            lambda: self._on_numeric_pref_changed(self.edit_duration, 'image.gif_duration', 50, Config.DEFAULT_GIF_DURATION)
+        )
         gif_layout.addWidget(self.edit_duration)
         gif_layout.addStretch()
         p_layout.addLayout(gif_layout)
         
         params.setLayout(p_layout)
         layout.addWidget(params)
+
+        pref_buttons = QHBoxLayout()
+        self.btn_save_prefs = QPushButton("保存設定")
+        self.btn_save_prefs.setProperty("secondary", True)
+        self.btn_save_prefs.clicked.connect(self._manual_save_preferences)
+        pref_buttons.addWidget(self.btn_save_prefs)
+
+        self.btn_reset_prefs = QPushButton("恢復預設")
+        self.btn_reset_prefs.setProperty("secondary", True)
+        self.btn_reset_prefs.clicked.connect(self._reset_preferences)
+        pref_buttons.addWidget(self.btn_reset_prefs)
+        pref_buttons.addStretch()
+        layout.addLayout(pref_buttons)
 
         # GIF 進度顯示區域
         self.gif_progress_widget = QWidget()
@@ -801,6 +838,9 @@ class MediaToolkit(QMainWindow):
         out_layout = QHBoxLayout()
         out_layout.addWidget(QLabel("輸出檔名:"))
         self.edit_output_video = QLineEdit("merged_video.mp4")
+        self.edit_output_video.editingFinished.connect(
+            lambda: self._on_text_pref_changed(self.edit_output_video, 'video.output_name')
+        )
         out_layout.addWidget(self.edit_output_video)
         output_group.setLayout(out_layout)
         layout.addWidget(output_group)
@@ -874,6 +914,9 @@ class MediaToolkit(QMainWindow):
         fmt_layout.addWidget(QLabel("輸出格式:"))
         self.combo_output_format = QComboBox()
         self.combo_output_format.addItems(Config.SUPPORTED_IMAGE_FORMATS)
+        self.combo_output_format.currentTextChanged.connect(
+            lambda text: self._on_combo_pref_changed('convert.output_format', text)
+        )
         fmt_layout.addWidget(self.combo_output_format)
         fmt_layout.addStretch()
         s_layout.addLayout(fmt_layout)
@@ -881,6 +924,9 @@ class MediaToolkit(QMainWindow):
         folder_layout = QHBoxLayout()
         folder_layout.addWidget(QLabel("輸出資料夾:"))
         self.edit_output_folder = QLineEdit("converted_images")
+        self.edit_output_folder.editingFinished.connect(
+            lambda: self._on_text_pref_changed(self.edit_output_folder, 'convert.output_folder')
+        )
         folder_layout.addWidget(self.edit_output_folder)
         btn_browse = QPushButton("📂 瀏覽")
         btn_browse.setProperty("secondary", True)
@@ -1167,6 +1213,9 @@ class MediaToolkit(QMainWindow):
         fmt_layout.addWidget(QLabel("輸出格式:"))
         self.compress_format = QComboBox()
         self.compress_format.addItems(['jpg', 'png', 'webp'])
+        self.compress_format.currentTextChanged.connect(
+            lambda text: self._on_combo_pref_changed('compression.output_format', text)
+        )
         fmt_layout.addWidget(self.compress_format)
         fmt_layout.addStretch()
         s_layout.addLayout(fmt_layout)
@@ -1175,6 +1224,9 @@ class MediaToolkit(QMainWindow):
         folder_layout = QHBoxLayout()
         folder_layout.addWidget(QLabel("輸出資料夾:"))
         self.compress_output_folder = QLineEdit("compressed_images")
+        self.compress_output_folder.editingFinished.connect(
+            lambda: self._on_text_pref_changed(self.compress_output_folder, 'compression.output_folder')
+        )
         folder_layout.addWidget(self.compress_output_folder)
         btn_browse = QPushButton("📂 瀏覽")
         btn_browse.setProperty("secondary", True)
@@ -1302,7 +1354,8 @@ class MediaToolkit(QMainWindow):
         btn_layout.addStretch()
         list_layout.addLayout(btn_layout)
 
-        self.pdf_list = DragDropListWidget(file_extensions=['.pdf'])
+        merge_exts = ['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff']
+        self.pdf_list = DragDropListWidget(file_extensions=merge_exts)
         self.pdf_list.drop_completed.connect(self._on_pdf_dropped)
         list_layout.addWidget(self.pdf_list)
 
@@ -1414,29 +1467,32 @@ class MediaToolkit(QMainWindow):
             self.showMaximized()
 
     def _save_window_geometry(self):
-        """保存視窗大小和位置"""
+        """保存視窗大小與位置"""
         self.config.set('window.width', self.width(), auto_save=False)
         self.config.set('window.height', self.height(), auto_save=False)
         self.config.set('window.x', self.x(), auto_save=False)
         self.config.set('window.y', self.y(), auto_save=False)
         self.config.set('window.maximized', self.isMaximized(), auto_save=False)
+        self._request_config_save()
 
     def _load_parameters(self):
-        """從配置載入參數"""
-        # 圖片處理參數
-        self.edit_cols.setText(str(self.config.get('image.grid_cols', 3)))
-        self.edit_rows.setText(str(self.config.get('image.grid_rows', 3)))
-        self.edit_duration.setText(str(self.config.get('image.gif_duration', 500)))
+        """從設定檔載入參數"""
+        self._loading_preferences = True
 
-        strategy = self.config.get('image.resize_strategy', '直接縮放')
+        # 圖片拼貼參數
+        self.edit_cols.setText(str(self.config.get('image.grid_cols', Config.DEFAULT_GRID_COLS)))
+        self.edit_rows.setText(str(self.config.get('image.grid_rows', Config.DEFAULT_GRID_ROWS)))
+        self.edit_duration.setText(str(self.config.get('image.gif_duration', Config.DEFAULT_GIF_DURATION)))
+
+        strategy = self.config.get('image.resize_strategy', Config.RESIZE_STRATEGY_DIRECT)
         index = self.combo_strategy.findText(strategy)
         if index >= 0:
             self.combo_strategy.setCurrentIndex(index)
 
-        # 影片處理參數
+        # 影片輸出參數
         self.edit_output_video.setText(self.config.get('video.output_name', 'merged_video.mp4'))
 
-        # 格式轉換參數
+        # 圖片轉檔參數
         self.edit_output_folder.setText(self.config.get('convert.output_folder', 'converted_images'))
 
         fmt = self.config.get('convert.output_format', 'PNG')
@@ -1444,23 +1500,86 @@ class MediaToolkit(QMainWindow):
         if index >= 0:
             self.combo_output_format.setCurrentIndex(index)
 
+        # 圖片壓縮參數
+        self.compress_output_folder.setText(self.config.get('compression.output_folder', 'compressed_images'))
+        compress_fmt = self.config.get('compression.output_format', 'jpg')
+        index = self.compress_format.findText(compress_fmt, Qt.MatchFixedString)
+        if index >= 0:
+            self.compress_format.setCurrentIndex(index)
+
+        self._loading_preferences = False
+
     def _save_parameters(self):
-        """保存參數到配置"""
+        """保存參數設置"""
         try:
-            # 圖片處理參數
-            self.config.set('image.grid_cols', int(self.edit_cols.text()), auto_save=False)
-            self.config.set('image.grid_rows', int(self.edit_rows.text()), auto_save=False)
-            self.config.set('image.gif_duration', int(self.edit_duration.text()), auto_save=False)
-            self.config.set('image.resize_strategy', self.combo_strategy.currentText(), auto_save=False)
+            self._update_config_value('image.grid_cols', int(self.edit_cols.text()))
+            self._update_config_value('image.grid_rows', int(self.edit_rows.text()))
+            self._update_config_value('image.gif_duration', int(self.edit_duration.text()))
+            self._update_config_value('image.resize_strategy', self.combo_strategy.currentText())
+            self._update_config_value('video.output_name', self.edit_output_video.text())
+            self._update_config_value('convert.output_folder', self.edit_output_folder.text())
+            self._update_config_value('convert.output_format', self.combo_output_format.currentText())
+        except Exception:
+            pass
 
-            # 影片處理參數
-            self.config.set('video.output_name', self.edit_output_video.text(), auto_save=False)
+    def _request_config_save(self):
+        """Queue a debounced config save to disk."""
+        self._save_timer.start(300)
 
-            # 格式轉換參數
-            self.config.set('convert.output_folder', self.edit_output_folder.text(), auto_save=False)
-            self.config.set('convert.output_format', self.combo_output_format.currentText(), auto_save=False)
-        except:
-            pass  # 忽略轉換錯誤
+    def _update_config_value(self, key, value):
+        """Update config and trigger debounced save."""
+        self.config.set(key, value, auto_save=False)
+        self._request_config_save()
+
+    def _on_numeric_pref_changed(self, widget, key, minimum, default):
+        if self._loading_preferences:
+            return
+        try:
+            value = int(widget.text())
+        except ValueError:
+            value = default
+        if value < minimum:
+            value = minimum
+        widget.setText(str(value))
+        self._update_config_value(key, value)
+        self._show_pref_status("Preferences updated")
+
+    def _on_text_pref_changed(self, widget, key):
+        if self._loading_preferences:
+            return
+        value = widget.text().strip()
+        self._update_config_value(key, value)
+        self._show_pref_status("Preferences updated")
+
+    def _on_combo_pref_changed(self, key, value):
+        if self._loading_preferences:
+            return
+        self._update_config_value(key, value)
+        self._show_pref_status("Preferences updated")
+
+    def _manual_save_preferences(self):
+        if self.config.save_config():
+            self._show_pref_status("Preferences saved")
+
+    def _reset_preferences(self):
+        reply = QMessageBox.question(self, "重設設定", "確定要恢復所有設定為預設值嗎？", QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        self.config.reset_to_default()
+        self.current_theme = self.config.get('theme', 'light')
+        self._apply_theme(self.current_theme)
+        self._load_parameters()
+        self._show_pref_status("已恢復預設設定")
+
+    def _show_pref_status(self, message):
+        self.statusBar().showMessage(message, 4000)
+
+    def _remember_folder(self, key, file_path):
+        if not file_path:
+            return
+        folder = os.path.dirname(file_path)
+        if folder:
+            self._update_config_value(key, folder)
 
     def closeEvent(self, event):
         """關閉視窗時保存配置"""
@@ -1519,14 +1638,14 @@ class MediaToolkit(QMainWindow):
     def _on_pdf_dropped(self, files, skipped):
         self._handle_list_drop(self.pdf_list, 'PDF queue', files, skipped)
 
-    def _handle_list_drop(self, widget, label, files, skipped):
+    def _handle_list_drop(self, widget, label, files, skipped, source_label="Drag"):
         added = []
         duplicates = []
         skipped_all = list(skipped or [])
         if files:
             added, duplicates, skipped_extra = widget.add_files(files)
             skipped_all.extend(skipped_extra)
-        self._show_ingest_feedback(label, 'Drag', len(added), len(duplicates), skipped_all)
+        self._show_ingest_feedback(label, source_label, len(added), len(duplicates), skipped_all)
 
     def _show_ingest_feedback(self, target, source_label, added_count, duplicate_count, skipped_files):
         if not (added_count or duplicate_count or skipped_files):
@@ -1547,6 +1666,120 @@ class MediaToolkit(QMainWindow):
         message = f"{target} [{source_label}]: " + '; '.join(parts)
         self.statusBar().showMessage(message, 6000)
 
+    def _prompt_pdf_password(self, file_path, invalid=False):
+        """顯示密碼輸入對話框，回傳輸入值或 None。"""
+        base = os.path.basename(file_path)
+        prompt = f"{base} 需要輸入密碼"
+        if invalid:
+            prompt += "\n密碼不正確，請再試一次。"
+        password, ok = QInputDialog.getText(
+            self,
+            "輸入 PDF 密碼",
+            prompt,
+            QLineEdit.Password
+        )
+        if ok and password:
+            return password
+        return None
+
+    def _unlock_pdf_with_prompt(self, pdf_path):
+        """確保 PDF 可供讀取，如需密碼則提示使用者。"""
+        cache_key = os.path.abspath(pdf_path)
+        password = self._pdf_password_cache.get(cache_key)
+        while True:
+            try:
+                unlocked_path, temp_path = ensure_unlocked_pdf(pdf_path, password=password)
+                if password:
+                    self._pdf_password_cache[cache_key] = password
+                return unlocked_path, temp_path
+            except PasswordRequiredError:
+                password = self._prompt_pdf_password(pdf_path, invalid=False)
+                if password is None:
+                    raise PasswordPromptCancelled()
+            except WrongPasswordProvided:
+                password = self._prompt_pdf_password(pdf_path, invalid=True)
+                if password is None:
+                    raise PasswordPromptCancelled()
+
+    def _execute_pdf_operation(self, pdf_path, operation):
+        """執行需要 PDF 密碼的操作，必要時提示使用者。"""
+        cache_key = os.path.abspath(pdf_path)
+        password = self._pdf_password_cache.get(cache_key)
+        while True:
+            try:
+                result = operation(password)
+                if password:
+                    self._pdf_password_cache[cache_key] = password
+                return result
+            except PasswordRequiredError:
+                password = self._prompt_pdf_password(pdf_path, invalid=False)
+                if password is None:
+                    raise PasswordPromptCancelled()
+            except WrongPasswordProvided:
+                password = self._prompt_pdf_password(pdf_path, invalid=True)
+                if password is None:
+                    raise PasswordPromptCancelled()
+
+    def _create_temp_pdf_path(self):
+        fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        return temp_path
+
+    def _prepare_merge_sources(self, files):
+        """對合併來源進行預處理（解密、轉檔）。"""
+        prepared = []
+        temp_files = []
+        summary = []
+
+        for file_path in files:
+            file_type = detect_file_type(file_path)
+            display_name = os.path.basename(file_path)
+            try:
+                if file_type == 'pdf':
+                    unlocked_path, temp_path = self._unlock_pdf_with_prompt(file_path)
+                    prepared.append(unlocked_path)
+                    if temp_path:
+                        temp_files.append(temp_path)
+                        summary.append(f"{display_name}：已解密並加入")
+                    else:
+                        summary.append(f"{display_name}：已加入 PDF")
+                elif file_type == 'word':
+                    temp_pdf = self._create_temp_pdf_path()
+                    if convert_word_to_pdf(file_path, temp_pdf):
+                        prepared.append(temp_pdf)
+                        temp_files.append(temp_pdf)
+                        summary.append(f"{display_name}：Word 轉 PDF 成功")
+                    else:
+                        os.remove(temp_pdf)
+                        summary.append(f"{display_name}：Word 轉 PDF 失敗，已略過")
+                elif file_type == 'image':
+                    temp_pdf = self._create_temp_pdf_path()
+                    if convert_image_to_pdf(file_path, temp_pdf):
+                        prepared.append(temp_pdf)
+                        temp_files.append(temp_pdf)
+                        summary.append(f"{display_name}：圖片轉 PDF 成功")
+                    else:
+                        os.remove(temp_pdf)
+                        summary.append(f"{display_name}：圖片轉 PDF 失敗，已略過")
+                else:
+                    summary.append(f"{display_name}：不支援的檔案格式，已略過")
+            except PasswordPromptCancelled:
+                summary.append(f"{display_name}：使用者取消輸入密碼，已略過")
+            except PasswordRequiredError:
+                summary.append(f"{display_name}：需要密碼但未輸入，已略過")
+            except WrongPasswordProvided:
+                summary.append(f"{display_name}：密碼多次錯誤，已略過")
+            except Exception as exc:
+                summary.append(f"{display_name}：處理失敗（{exc}），已略過")
+
+        return prepared, temp_files, summary
+
+    def _show_merge_summary(self, summary_lines):
+        if not summary_lines:
+            return
+        message = "處理摘要：\n" + "\n".join(f"- {line}" for line in summary_lines)
+        QMessageBox.information(self, "PDF 合併摘要", message)
+
     def _add_watermark(self):
         files = self.image_preview.get_files()
         if not files:
@@ -1556,26 +1789,32 @@ class MediaToolkit(QMainWindow):
             self.show_info("浮水印添加完成！")
 
     def select_files(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", "", Config.IMAGE_FILE_FILTER)
+        start_dir = self.config.get('image.last_folder', '')
+        files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", start_dir or "", Config.IMAGE_FILE_FILTER)
         if files:
             self.image_preview.add_files(files, source="manual")
+            self._remember_folder('image.last_folder', files[0])
 
     def select_video_files(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "選擇影片", "", Config.VIDEO_FILE_FILTER)
+        start_dir = self.config.get('video.last_folder', '')
+        files, _ = QFileDialog.getOpenFileNames(self, "選擇影片", start_dir or "", Config.VIDEO_FILE_FILTER)
         if files:
-            added, duplicates, skipped = self.video_files_list.add_files(files)
-            self._show_ingest_feedback("Video queue", "Select", len(added), len(duplicates), skipped)
+            self._handle_list_drop(self.video_files_list, "Video queue", files, [], source_label="Select")
+            self._remember_folder('video.last_folder', files[0])
 
     def select_convert_images(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", "", Config.IMAGE_FILE_FILTER)
+        start_dir = self.config.get('convert.last_folder', '')
+        files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", start_dir or "", Config.IMAGE_FILE_FILTER)
         if files:
-            added, duplicates, skipped = self.convert_list.add_files(files)
-            self._show_ingest_feedback("Convert queue", "Select", len(added), len(duplicates), skipped)
+            self._handle_list_drop(self.convert_list, "Convert queue", files, [], source_label="Select")
+            self._remember_folder('convert.last_folder', files[0])
 
     def browse_output_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "選擇輸出資料夾")
+        start_dir = self.config.get('convert.output_folder', '')
+        folder = QFileDialog.getExistingDirectory(self, "選擇輸出資料夾", start_dir or "")
         if folder:
             self.edit_output_folder.setText(folder)
+            self._on_text_pref_changed(self.edit_output_folder, 'convert.output_folder')
 
     def generate_merged_image(self):
         files = self.image_preview.get_files()
@@ -1808,14 +2047,18 @@ class MediaToolkit(QMainWindow):
 
     # === 文檔處理方法 ===
     def _browse_word(self):
-        file, _ = QFileDialog.getOpenFileName(self, "選擇 Word", "", "Word (*.docx *.doc)")
+        start_dir = self.config.get('document.last_word_folder', '')
+        file, _ = QFileDialog.getOpenFileName(self, "選擇 Word", start_dir or "", "Word (*.docx *.doc)")
         if file:
             self.word_input.setText(file)
+            self._remember_folder('document.last_word_folder', file)
 
     def _browse_pdf(self):
-        file, _ = QFileDialog.getOpenFileName(self, "選擇 PDF", "", "PDF (*.pdf)")
+        start_dir = self.config.get('document.last_pdf_folder', '')
+        file, _ = QFileDialog.getOpenFileName(self, "選擇 PDF", start_dir or "", "PDF (*.pdf)")
         if file:
             self.pdf_input.setText(file)
+            self._remember_folder('document.last_pdf_folder', file)
 
     def _word_to_pdf(self):
         word = self.word_input.text()
@@ -1835,17 +2078,27 @@ class MediaToolkit(QMainWindow):
             self.show_warning("請選擇有效的 PDF 文件")
             return
         word, _ = QFileDialog.getSaveFileName(self, "儲存 Word", "", "Word (*.docx)")
-        if word:
-            if convert_pdf_to_word(pdf, word):
+        if not word:
+            return
+
+        try:
+            def action(password):
+                return convert_pdf_to_word(pdf, word, password=password)
+
+            if self._execute_pdf_operation(pdf, action):
                 self.show_info(f"轉換成功！\n{word}")
             else:
                 self.show_error("PDF 轉 Word 失敗")
+        except PasswordPromptCancelled:
+            self.statusBar().showMessage("已取消輸入密碼", 4000)
 
     def _select_pdfs(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "選擇 PDF", "", "PDF (*.pdf)")
+        start_dir = self.config.get('document.last_pdf_folder', '')
+        filter_str = "支援檔案 (*.pdf *.doc *.docx *.jpg *.jpeg *.png *.bmp *.gif *.webp *.tiff)"
+        files, _ = QFileDialog.getOpenFileNames(self, "選擇檔案", start_dir or "", filter_str)
         if files:
-            added, duplicates, skipped = self.pdf_list.add_files(files)
-            self._show_ingest_feedback("PDF queue", "Select", len(added), len(duplicates), skipped)
+            self._handle_list_drop(self.pdf_list, "PDF queue", files, [], source_label="Select")
+            self._remember_folder('document.last_pdf_folder', files[0])
 
     def _pdf_move_up(self):
         """上移選中的 PDF"""
@@ -1884,24 +2137,45 @@ class MediaToolkit(QMainWindow):
     def _merge_pdfs(self):
         files = self.pdf_list.get_all_files()
         if not files:
-            self.show_warning("請先選擇 PDF 文件")
+            self.show_warning("請選擇檔案")
             return
         output, _ = QFileDialog.getSaveFileName(self, "儲存 PDF", "", "PDF (*.pdf)")
-        if output:
-            add_toc = self.pdf_add_toc.isChecked()
-            add_page_numbers = self.pdf_add_page_numbers.isChecked()
+        if not output:
+            return
 
-            if merge_pdfs(files, output, add_toc=add_toc, add_page_numbers=add_page_numbers):
-                self.show_info(f"合併成功！\n{output}")
+        add_toc = self.pdf_add_toc.isChecked()
+        add_page_numbers = self.pdf_add_page_numbers.isChecked()
+
+        prepared, temp_files, summary = self._prepare_merge_sources(files)
+        if not prepared:
+            self._show_merge_summary(summary)
+            self.show_warning("沒有可合併的檔案")
+            return
+
+        try:
+            if merge_pdfs(prepared, output, add_toc=add_toc, add_page_numbers=add_page_numbers):
+                self.show_info(f"合併完成！\n{output}")
             else:
                 self.show_error("PDF 合併失敗")
+        finally:
+            for temp_path in temp_files:
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
+
+        summary.append(f"輸出檔案：{output}")
+        self._show_merge_summary(summary)
 
     # === 影片轉 GIF 方法 ===
     def _select_video_for_gif(self):
         """選擇影片檔案"""
-        file, _ = QFileDialog.getOpenFileName(self, "選擇影片", "", Config.VIDEO_FILE_FILTER)
+        start_dir = self.config.get('video.last_folder', '')
+        file, _ = QFileDialog.getOpenFileName(self, "選擇影片", start_dir or "", Config.VIDEO_FILE_FILTER)
         if file:
             self.video_to_gif_path.setText(file)
+            self._remember_folder('video.last_folder', file)
 
     def _on_gif_mode_changed(self):
         """模式切換時更新 UI"""
@@ -2030,10 +2304,11 @@ class MediaToolkit(QMainWindow):
     # === 圖片壓縮方法 ===
     def _select_images_for_compression(self):
         """選擇圖片進行壓縮"""
-        files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", "", Config.IMAGE_FILE_FILTER)
+        start_dir = self.config.get('compression.last_folder', '')
+        files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", start_dir or "", Config.IMAGE_FILE_FILTER)
         if files:
-            added, duplicates, skipped = self.compress_list.add_files(files)
-            self._show_ingest_feedback("Compress queue", "Select", len(added), len(duplicates), skipped)
+            self._handle_list_drop(self.compress_list, "Compress queue", files, [], source_label="Select")
+            self._remember_folder('compression.last_folder', files[0])
 
     def _on_compress_dropped(self, files, skipped):
         """Handle drag-and-drop for compression queue."""
@@ -2046,9 +2321,11 @@ class MediaToolkit(QMainWindow):
 
     def _browse_compress_folder(self):
         """瀏覽輸出資料夾"""
-        folder = QFileDialog.getExistingDirectory(self, "選擇輸出資料夾")
+        start_dir = self.config.get('compression.output_folder', '')
+        folder = QFileDialog.getExistingDirectory(self, "選擇輸出資料夾", start_dir or "")
         if folder:
             self.compress_output_folder.setText(folder)
+            self._on_text_pref_changed(self.compress_output_folder, 'compression.output_folder')
 
     def _start_compression(self):
         """開始壓縮圖片"""

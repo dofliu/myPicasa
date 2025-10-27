@@ -682,6 +682,7 @@ class MediaToolkit(QMainWindow):
         self.image_preview = ImagePreviewGrid()
         self.image_preview.file_clicked.connect(self._show_image_viewer)
         self.image_preview.files_changed.connect(self._update_image_stats)
+        self.image_preview.ingest_completed.connect(self._on_image_ingest_completed)
         self.image_preview.setMinimumHeight(200)
         file_layout.addWidget(self.image_preview)
         group.setLayout(file_layout)
@@ -791,7 +792,7 @@ class MediaToolkit(QMainWindow):
         file_layout.addLayout(btn_layout)
         
         self.video_files_list = DragDropListWidget(file_extensions=Config.SUPPORTED_VIDEO_FORMATS)
-        self.video_files_list.files_dropped.connect(self._on_video_dropped)
+        self.video_files_list.drop_completed.connect(self._on_video_dropped)
         file_layout.addWidget(self.video_files_list)
         group.setLayout(file_layout)
         layout.addWidget(group)
@@ -861,7 +862,7 @@ class MediaToolkit(QMainWindow):
         
         exts = ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp']
         self.convert_list = DragDropListWidget(file_extensions=exts)
-        self.convert_list.files_dropped.connect(self._on_convert_dropped)
+        self.convert_list.drop_completed.connect(self._on_convert_dropped)
         file_layout.addWidget(self.convert_list)
         group.setLayout(file_layout)
         layout.addWidget(group)
@@ -1111,7 +1112,7 @@ class MediaToolkit(QMainWindow):
 
         exts = ['.jpg', '.jpeg', '.png', '.bmp', '.webp']
         self.compress_list = DragDropListWidget(file_extensions=exts)
-        self.compress_list.files_dropped.connect(self._on_compress_dropped)
+        self.compress_list.drop_completed.connect(self._on_compress_dropped)
         file_layout.addWidget(self.compress_list)
 
         group.setLayout(file_layout)
@@ -1302,7 +1303,7 @@ class MediaToolkit(QMainWindow):
         list_layout.addLayout(btn_layout)
 
         self.pdf_list = DragDropListWidget(file_extensions=['.pdf'])
-        self.pdf_list.files_dropped.connect(self._on_pdf_dropped)
+        self.pdf_list.drop_completed.connect(self._on_pdf_dropped)
         list_layout.addWidget(self.pdf_list)
 
         file_layout.addLayout(list_layout, 4)
@@ -1503,16 +1504,48 @@ class MediaToolkit(QMainWindow):
 
     def _update_image_stats(self):
         count = len(self.image_preview.get_files())
-        self.statusBar().showMessage(f'📊 目前有 {count} 個圖片')
+        self.statusBar().showMessage(f'Images ready: {count} files selected')
 
-    def _on_video_dropped(self, files):
-        self.video_files_list.add_files(files)
+    def _on_image_ingest_completed(self, source, added, duplicates, skipped):
+        source_label = 'Drag' if source == 'drag-drop' else 'Select'
+        self._show_ingest_feedback('Image queue', source_label, added, duplicates, skipped)
 
-    def _on_convert_dropped(self, files):
-        self.convert_list.add_files(files)
+    def _on_video_dropped(self, files, skipped):
+        self._handle_list_drop(self.video_files_list, 'Video queue', files, skipped)
 
-    def _on_pdf_dropped(self, files):
-        self.pdf_list.add_files(files)
+    def _on_convert_dropped(self, files, skipped):
+        self._handle_list_drop(self.convert_list, 'Convert queue', files, skipped)
+
+    def _on_pdf_dropped(self, files, skipped):
+        self._handle_list_drop(self.pdf_list, 'PDF queue', files, skipped)
+
+    def _handle_list_drop(self, widget, label, files, skipped):
+        added = []
+        duplicates = []
+        skipped_all = list(skipped or [])
+        if files:
+            added, duplicates, skipped_extra = widget.add_files(files)
+            skipped_all.extend(skipped_extra)
+        self._show_ingest_feedback(label, 'Drag', len(added), len(duplicates), skipped_all)
+
+    def _show_ingest_feedback(self, target, source_label, added_count, duplicate_count, skipped_files):
+        if not (added_count or duplicate_count or skipped_files):
+            return
+
+        parts = []
+        if added_count:
+            parts.append(f'Added {added_count}')
+        if duplicate_count:
+            parts.append(f'Duplicates {duplicate_count}')
+        if skipped_files:
+            sample_names = [os.path.basename(path) or path for path in skipped_files[:3]]
+            sample_text = ', '.join(sample_names)
+            if len(skipped_files) > 3:
+                sample_text += ' ...'
+            parts.append(f'Skipped {len(skipped_files)} unsupported: {sample_text}')
+
+        message = f"{target} [{source_label}]: " + '; '.join(parts)
+        self.statusBar().showMessage(message, 6000)
 
     def _add_watermark(self):
         files = self.image_preview.get_files()
@@ -1525,17 +1558,19 @@ class MediaToolkit(QMainWindow):
     def select_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", "", Config.IMAGE_FILE_FILTER)
         if files:
-            self.image_preview.add_files(files)
+            self.image_preview.add_files(files, source="manual")
 
     def select_video_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "選擇影片", "", Config.VIDEO_FILE_FILTER)
         if files:
-            self.video_files_list.add_files(files)
+            added, duplicates, skipped = self.video_files_list.add_files(files)
+            self._show_ingest_feedback("Video queue", "Select", len(added), len(duplicates), skipped)
 
     def select_convert_images(self):
         files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", "", Config.IMAGE_FILE_FILTER)
         if files:
-            self.convert_list.add_files(files)
+            added, duplicates, skipped = self.convert_list.add_files(files)
+            self._show_ingest_feedback("Convert queue", "Select", len(added), len(duplicates), skipped)
 
     def browse_output_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "選擇輸出資料夾")
@@ -1809,7 +1844,8 @@ class MediaToolkit(QMainWindow):
     def _select_pdfs(self):
         files, _ = QFileDialog.getOpenFileNames(self, "選擇 PDF", "", "PDF (*.pdf)")
         if files:
-            self.pdf_list.add_files(files)
+            added, duplicates, skipped = self.pdf_list.add_files(files)
+            self._show_ingest_feedback("PDF queue", "Select", len(added), len(duplicates), skipped)
 
     def _pdf_move_up(self):
         """上移選中的 PDF"""
@@ -1996,11 +2032,13 @@ class MediaToolkit(QMainWindow):
         """選擇圖片進行壓縮"""
         files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", "", Config.IMAGE_FILE_FILTER)
         if files:
-            self.compress_list.add_files(files)
+            added, duplicates, skipped = self.compress_list.add_files(files)
+            self._show_ingest_feedback("Compress queue", "Select", len(added), len(duplicates), skipped)
 
-    def _on_compress_dropped(self, files):
-        """拖放圖片到壓縮列表"""
-        self.compress_list.add_files(files)
+    def _on_compress_dropped(self, files, skipped):
+        """Handle drag-and-drop for compression queue."""
+        self._handle_list_drop(self.compress_list, 'Compress queue', files, skipped)
+
 
     def _update_quality_label(self, value):
         """更新品質標籤"""

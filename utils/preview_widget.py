@@ -4,7 +4,7 @@
 """
 import os
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QGridLayout, QDialog, QFrame, QSizePolicy
 )
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QDragEnterEvent, QDropEvent
@@ -108,9 +108,10 @@ class ImageThumbnail(QFrame):
             width, height = img.size
             file_size = os.path.getsize(self.file_path)
             file_size_kb = file_size / 1024
+            ext = os.path.splitext(self.file_path)[1].replace('.', '').upper() or "IMG"
 
             # 顯示資訊
-            info_text = f"{width}×{height} · {file_size_kb:.1f}KB"
+            info_text = f"{width}x{height} · {file_size_kb:.1f}KB · {ext}"
             self.info_label.setText(info_text)
 
             # 建立縮圖
@@ -155,6 +156,7 @@ class ImagePreviewGrid(QWidget):
     file_clicked = pyqtSignal(str)  # 檔案被點擊
     file_removed = pyqtSignal(str)  # 檔案被移除
     files_changed = pyqtSignal()  # 檔案列表變更
+    ingest_completed = pyqtSignal(str, int, int, list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -212,22 +214,29 @@ class ImagePreviewGrid(QWidget):
         """)
         self.grid_layout.addWidget(self.placeholder, 0, 0, Qt.AlignCenter)
 
-    def add_files(self, file_paths):
-        """?????????
+    def add_files(self, file_paths, source="manual", skipped_files=None):
+        """Add files into the preview grid and emit ingest summary."""
+        added = []
+        duplicates = []
+        skipped = list(skipped_files or [])
 
-        Args:
-            file_paths: ??????
-        """
-        added_any = False
         for file_path in file_paths:
-            if file_path not in self.files:
-                self.files.append(file_path)
-                self._add_thumbnail(file_path)
-                added_any = True
+            if file_path in self.files:
+                duplicates.append(file_path)
+                continue
+
+            self.files.append(file_path)
+            self._add_thumbnail(file_path)
+            added.append(file_path)
 
         self._update_ui()
-        if added_any:
+        if added:
             self.files_changed.emit()
+
+        if source and (added or duplicates or skipped):
+            self.ingest_completed.emit(source, len(added), len(duplicates), skipped)
+
+        return added, duplicates
 
     def _add_thumbnail(self, file_path):
         """新增縮圖"""
@@ -312,9 +321,10 @@ class ImagePreviewGrid(QWidget):
             event.ignore()
             return
 
-        dropped_files = self._extract_files_from_event(event)
-        if dropped_files:
-            self.add_files(dropped_files)
+        valid_files, skipped_files = self._extract_files_from_event(event)
+        self.add_files(valid_files, source="drag-drop", skipped_files=skipped_files)
+
+        if valid_files or skipped_files:
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -332,30 +342,45 @@ class ImagePreviewGrid(QWidget):
         return False
 
     def _extract_files_from_event(self, event):
-        """從拖曳事件取得所有有效檔案"""
+        """Collect valid and skipped files from a drop event."""
         files = []
+        skipped = []
         for url in event.mimeData().urls():
             path = url.toLocalFile()
             if not path:
                 continue
             if os.path.isdir(path):
-                files.extend(self._scan_directory(path))
+                valid, skipped_in_dir = self._scan_directory(path)
+                files.extend(valid)
+                skipped.extend(skipped_in_dir)
             elif self._is_supported_file(path):
                 files.append(path)
-        return files
+            else:
+                skipped.append(path)
+        return files, skipped
 
     def _scan_directory(self, directory):
-        """掃描資料夾並回傳所有符合條件的檔案"""
+        """Scan folders and keep the UI responsive during ingest."""
         valid_files = []
+        skipped_files = []
+        processed = 0
+
         try:
             for root, _, filenames in os.walk(directory):
                 for name in filenames:
                     file_path = os.path.join(root, name)
                     if self._is_supported_file(file_path):
                         valid_files.append(file_path)
+                    else:
+                        skipped_files.append(file_path)
+
+                    processed += 1
+                    if processed % 50 == 0:
+                        QApplication.processEvents()
         except Exception as exc:
-            print(f"掃描資料夾時發生錯誤：{exc}")
-        return valid_files
+            print(f"Directory scan error: {exc}")
+
+        return valid_files, skipped_files
 
     def _is_supported_file(self, file_path):
         """判斷副檔名是否有效"""

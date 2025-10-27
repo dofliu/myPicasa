@@ -13,6 +13,7 @@ class DragDropListWidget(QListWidget):
 
     # 自訂信號：檔案被拖放時發出
     files_dropped = pyqtSignal(list)
+    drop_completed = pyqtSignal(list, list)
 
     def __init__(self, parent=None, file_extensions=None):
         """
@@ -77,6 +78,7 @@ class DragDropListWidget(QListWidget):
     def dropEvent(self, event: QDropEvent):
         """放下事件"""
         files = []
+        skipped_files = []
 
         # 處理所有拖放的 URL
         for url in event.mimeData().urls():
@@ -84,15 +86,21 @@ class DragDropListWidget(QListWidget):
 
             # 如果是資料夾，掃描其中的檔案
             if os.path.isdir(file_path):
-                files.extend(self._scan_directory(file_path))
+                valid_files, skipped = self._scan_directory(file_path)
+                files.extend(valid_files)
+                skipped_files.extend(skipped)
             # 如果是檔案，檢查副檔名
             elif os.path.isfile(file_path):
                 if self._is_valid_file(file_path):
                     files.append(file_path)
+                else:
+                    skipped_files.append(file_path)
 
         # 發出信號
         if files:
             self.files_dropped.emit(files)
+        if files or skipped_files:
+            self.drop_completed.emit(files, skipped_files)
 
         # 恢復原始樣式
         self.dragLeaveEvent(event)
@@ -109,6 +117,7 @@ class DragDropListWidget(QListWidget):
             符合條件的檔案路徑列表
         """
         valid_files = []
+        skipped_files = []
 
         try:
             for root, dirs, files in os.walk(directory):
@@ -116,10 +125,12 @@ class DragDropListWidget(QListWidget):
                     file_path = os.path.join(root, filename)
                     if self._is_valid_file(file_path):
                         valid_files.append(file_path)
+                    else:
+                        skipped_files.append(file_path)
         except Exception as e:
             print(f"掃描資料夾時發生錯誤：{e}")
 
-        return valid_files
+        return valid_files, skipped_files
 
     def _is_valid_file(self, file_path):
         """
@@ -139,16 +150,23 @@ class DragDropListWidget(QListWidget):
         return ext.lower() in self.file_extensions
 
     def add_files(self, files):
-        """
-        新增檔案到清單
+        """Add files into the list widget with duplicate and format checks."""
+        added = []
+        duplicates = []
+        skipped = []
 
-        Args:
-            files: 檔案路徑列表
-        """
         for file_path in files:
-            # 避免重複
+            if not self._is_valid_file(file_path):
+                skipped.append(file_path)
+                continue
+
             if not self._is_file_in_list(file_path):
                 self.addItem(file_path)
+                added.append(file_path)
+            else:
+                duplicates.append(file_path)
+
+        return added, duplicates, skipped
 
     def _is_file_in_list(self, file_path):
         """檢查檔案是否已在清單中"""
@@ -173,6 +191,7 @@ class DropZoneWidget(QListWidget):
     """
 
     files_dropped = pyqtSignal(list)
+    drop_completed = pyqtSignal(list, list)
 
     def __init__(self, parent=None, file_extensions=None, placeholder_text=""):
         super().__init__(parent)
@@ -183,10 +202,15 @@ class DropZoneWidget(QListWidget):
         # 建立內部的拖放清單
         self._drag_drop_list = DragDropListWidget(self, file_extensions)
         self._drag_drop_list.files_dropped.connect(self._on_files_dropped)
+        self._drag_drop_list.drop_completed.connect(self._on_drop_completed)
 
     def _on_files_dropped(self, files):
         """檔案被拖放時的處理"""
         self.files_dropped.emit(files)
+
+    def _on_drop_completed(self, files, skipped):
+        """Forward drop summary from inner widget."""
+        self.drop_completed.emit(files, skipped)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         """委派給內部清單"""

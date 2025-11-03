@@ -8,6 +8,9 @@ import os
 import sys
 import tempfile
 import base64
+import subprocess
+import platform
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +28,7 @@ from utils import (
     merge_pdfs,
     resize_image
 )
+from utils.doc_converter import check_dependencies
 from PIL import Image
 
 # 檔案大小限制（位元組）
@@ -69,6 +73,73 @@ def file_to_base64(file_path: str) -> str:
     """將檔案轉換為 base64"""
     with open(file_path, 'rb') as f:
         return base64.b64encode(f.read()).decode('utf-8')
+
+
+def get_diagnostic_info() -> str:
+    """獲取診斷資訊"""
+    info = []
+
+    # 檢查依賴項
+    deps = check_dependencies()
+    info.append("依賴項狀態:")
+    for dep, installed in deps.items():
+        status = "✓ 已安裝" if installed else "✗ 未安裝"
+        info.append(f"  - {dep}: {status}")
+
+    # 檢查 LibreOffice
+    soffice_path = None
+    system = platform.system()
+    if system == 'Windows':
+        soffice_paths = [
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"
+        ]
+        for path in soffice_paths:
+            if os.path.exists(path):
+                soffice_path = path
+                break
+    else:
+        try:
+            result = subprocess.run(['which', 'soffice'],
+                                    capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                soffice_path = result.stdout.strip()
+        except:
+            pass
+
+    info.append(f"\nLibreOffice:")
+    if soffice_path:
+        info.append(f"  ✓ 已安裝於: {soffice_path}")
+    else:
+        info.append(f"  ✗ 未找到")
+
+    info.append(f"\n作業系統: {platform.system()} {platform.release()}")
+    info.append(f"Python 版本: {sys.version.split()[0]}")
+
+    return "\n".join(info)
+
+
+def format_error_message(operation: str, error: Exception, include_diagnostic: bool = True) -> str:
+    """格式化錯誤訊息"""
+    lines = [f"❌ {operation} 失敗"]
+    lines.append(f"錯誤類型: {type(error).__name__}")
+    lines.append(f"錯誤訊息: {str(error)}")
+
+    if include_diagnostic:
+        lines.append("\n" + "="*50)
+        lines.append("診斷資訊:")
+        lines.append("="*50)
+        lines.append(get_diagnostic_info())
+        lines.append("\n建議:")
+
+        deps = check_dependencies()
+        if not deps.get('docx2pdf'):
+            lines.append("  • 安裝 docx2pdf: pip install docx2pdf")
+            lines.append("  • 或安裝 LibreOffice 作為替代方案")
+        if not deps.get('pdf2docx'):
+            lines.append("  • 安裝 pdf2docx: pip install pdf2docx")
+
+    return "\n".join(lines)
 
 
 @server.list_tools()
@@ -202,6 +273,15 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["image_files"]
             }
+        ),
+        Tool(
+            name="check_system",
+            description="檢查系統環境和依賴項狀態，診斷轉換功能是否可用。建議在轉換失敗時呼叫此工具。",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
         )
     ]
 
@@ -226,6 +306,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
         elif name == "create_gif":
             return await handle_create_gif(arguments)
 
+        elif name == "check_system":
+            return await handle_check_system(arguments)
+
         elif name == "compress_images":
             return await handle_compress_images(arguments)
 
@@ -239,11 +322,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
 async def handle_word_to_pdf(arguments: dict) -> list[TextContent | EmbeddedResource]:
     """處理 Word 轉 PDF"""
     word_data = arguments["word_data"]
-
-    # 保存 Word 文件
-    word_path = save_base64_file(word_data, ".docx")
+    word_path = None
+    pdf_path = None
 
     try:
+        # 保存 Word 文件
+        word_path = save_base64_file(word_data, ".docx")
+
         # 驗證檔案大小
         validate_file_size(word_path, MAX_PDF_SIZE, "Word")
 
@@ -252,7 +337,22 @@ async def handle_word_to_pdf(arguments: dict) -> list[TextContent | EmbeddedReso
         success = convert_word_to_pdf(word_path, pdf_path)
 
         if not success:
-            return [TextContent(type="text", text="Word 轉 PDF 失敗")]
+            # 轉換失敗，提供診斷資訊
+            error_msg = format_error_message(
+                "Word 轉 PDF",
+                Exception("轉換函數返回 False，可能是依賴項缺失或系統配置問題"),
+                include_diagnostic=True
+            )
+            return [TextContent(type="text", text=error_msg)]
+
+        # 檢查 PDF 是否生成成功
+        if not os.path.exists(pdf_path) or os.path.getsize(pdf_path) == 0:
+            error_msg = format_error_message(
+                "Word 轉 PDF",
+                Exception(f"PDF 文件未生成或大小為 0"),
+                include_diagnostic=True
+            )
+            return [TextContent(type="text", text=error_msg)]
 
         # 讀取 PDF 並轉換為 base64
         pdf_base64 = file_to_base64(pdf_path)
@@ -262,7 +362,7 @@ async def handle_word_to_pdf(arguments: dict) -> list[TextContent | EmbeddedReso
         os.unlink(pdf_path)
 
         return [
-            TextContent(type="text", text="Word 轉 PDF 成功！"),
+            TextContent(type="text", text="✅ Word 轉 PDF 成功！"),
             EmbeddedResource(
                 type="resource",
                 resource={
@@ -275,19 +375,25 @@ async def handle_word_to_pdf(arguments: dict) -> list[TextContent | EmbeddedReso
 
     except Exception as e:
         # 清理臨時檔案
-        if os.path.exists(word_path):
+        if word_path and os.path.exists(word_path):
             os.unlink(word_path)
-        raise e
+        if pdf_path and os.path.exists(pdf_path):
+            os.unlink(pdf_path)
+
+        error_msg = format_error_message("Word 轉 PDF", e, include_diagnostic=True)
+        return [TextContent(type="text", text=error_msg)]
 
 
 async def handle_pdf_to_word(arguments: dict) -> list[TextContent | EmbeddedResource]:
     """處理 PDF 轉 Word"""
     pdf_data = arguments["pdf_data"]
-
-    # 保存 PDF 文件
-    pdf_path = save_base64_file(pdf_data, ".pdf")
+    pdf_path = None
+    word_path = None
 
     try:
+        # 保存 PDF 文件
+        pdf_path = save_base64_file(pdf_data, ".pdf")
+
         # 驗證檔案大小
         validate_file_size(pdf_path, MAX_PDF_SIZE, "PDF")
 
@@ -296,7 +402,22 @@ async def handle_pdf_to_word(arguments: dict) -> list[TextContent | EmbeddedReso
         success = convert_pdf_to_word(pdf_path, word_path)
 
         if not success:
-            return [TextContent(type="text", text="PDF 轉 Word 失敗")]
+            # 轉換失敗，提供診斷資訊
+            error_msg = format_error_message(
+                "PDF 轉 Word",
+                Exception("轉換函數返回 False，可能是依賴項缺失或 PDF 格式問題"),
+                include_diagnostic=True
+            )
+            return [TextContent(type="text", text=error_msg)]
+
+        # 檢查 Word 是否生成成功
+        if not os.path.exists(word_path) or os.path.getsize(word_path) == 0:
+            error_msg = format_error_message(
+                "PDF 轉 Word",
+                Exception(f"Word 文件未生成或大小為 0"),
+                include_diagnostic=True
+            )
+            return [TextContent(type="text", text=error_msg)]
 
         # 讀取 Word 並轉換為 base64
         word_base64 = file_to_base64(word_path)
@@ -306,7 +427,7 @@ async def handle_pdf_to_word(arguments: dict) -> list[TextContent | EmbeddedReso
         os.unlink(word_path)
 
         return [
-            TextContent(type="text", text="PDF 轉 Word 成功！"),
+            TextContent(type="text", text="✅ PDF 轉 Word 成功！"),
             EmbeddedResource(
                 type="resource",
                 resource={
@@ -319,9 +440,13 @@ async def handle_pdf_to_word(arguments: dict) -> list[TextContent | EmbeddedReso
 
     except Exception as e:
         # 清理臨時檔案
-        if os.path.exists(pdf_path):
+        if pdf_path and os.path.exists(pdf_path):
             os.unlink(pdf_path)
-        raise e
+        if word_path and os.path.exists(word_path):
+            os.unlink(word_path)
+
+        error_msg = format_error_message("PDF 轉 Word", e, include_diagnostic=True)
+        return [TextContent(type="text", text=error_msg)]
 
 
 async def handle_merge_pdfs(arguments: dict) -> list[TextContent | EmbeddedResource]:
@@ -594,6 +719,49 @@ async def handle_compress_images(arguments: dict) -> list[TextContent]:
             if os.path.exists(path):
                 os.unlink(path)
         raise e
+
+
+async def handle_check_system(arguments: dict) -> list[TextContent]:
+    """處理系統檢查"""
+    try:
+        diagnostic_info = get_diagnostic_info()
+
+        # 添加額外的使用建議
+        deps = check_dependencies()
+        suggestions = []
+
+        if not deps.get('docx2pdf'):
+            suggestions.append("⚠️ Word 轉 PDF 功能可能受限")
+            suggestions.append("   建議：")
+            suggestions.append("   1. pip install docx2pdf")
+            suggestions.append("   2. 或確保 LibreOffice 已安裝")
+
+        if not deps.get('pdf2docx'):
+            suggestions.append("⚠️ PDF 轉 Word 功能可能受限")
+            suggestions.append("   建議：pip install pdf2docx")
+
+        if not deps.get('reportlab'):
+            suggestions.append("⚠️ PDF 目錄和頁碼功能將無法使用")
+            suggestions.append("   建議：pip install reportlab")
+
+        if not deps.get('pypdf'):
+            suggestions.append("⚠️ PDF 處理功能將無法使用")
+            suggestions.append("   建議：pip install pypdf")
+
+        # 組合完整訊息
+        full_message = diagnostic_info
+        if suggestions:
+            full_message += "\n\n" + "="*50
+            full_message += "\n⚠️  問題和建議\n"
+            full_message += "="*50 + "\n"
+            full_message += "\n".join(suggestions)
+        else:
+            full_message += "\n\n✅ 所有依賴項已正確安裝，系統運行正常！"
+
+        return [TextContent(type="text", text=full_message)]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"系統檢查失敗: {str(e)}\n{traceback.format_exc()}")]
 
 
 async def main():

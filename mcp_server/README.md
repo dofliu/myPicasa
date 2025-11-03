@@ -19,6 +19,9 @@
 - **創建 GIF** - 從多張圖片創建動畫 GIF
 - **圖片壓縮** - 批次壓縮圖片，節省空間
 
+### 🔧 系統工具
+- **系統檢查** - 診斷環境和依賴項狀態（⭐ 新增）
+
 ---
 
 ## 📊 檔案大小限制（避免大量 token 消耗）
@@ -227,7 +230,74 @@ pip install mcp Pillow pypdf docx2pdf pdf2docx reportlab
 
 ---
 
+### 7. `check_system` ⭐ 新增
+檢查系統環境和依賴項狀態
+
+**參數:**
+- 無需參數
+
+**功能:**
+- 檢測所有依賴項安裝狀態
+- 檢查 LibreOffice 安裝情況
+- 顯示作業系統和 Python 版本
+- 提供針對性的安裝建議
+
+**使用時機:**
+- ✅ 首次使用前，確認環境配置
+- ✅ 轉換功能失敗時，診斷問題
+- ✅ 安裝新依賴後，驗證安裝
+
+**範例輸出:**
+```
+依賴項狀態:
+  - pypdf: ✓ 已安裝
+  - docx2pdf: ✗ 未安裝
+  - pdf2docx: ✓ 已安裝
+  - reportlab: ✓ 已安裝
+
+LibreOffice:
+  ✓ 已安裝於: /usr/bin/soffice
+
+作業系統: Linux 4.4.0
+Python 版本: 3.8.10
+
+⚠️ Word 轉 PDF 功能可能受限
+   建議：
+   1. pip install docx2pdf
+   2. 或確保 LibreOffice 已安裝
+```
+
+---
+
 ## 🔍 故障排除
+
+### 🆕 自動診斷工具（推薦）
+
+**首先使用 `check_system` 工具診斷問題：**
+
+在 Claude Desktop 中輸入：
+```
+請檢查 MediaToolkit 系統狀態
+```
+
+系統會自動：
+- ✅ 檢測所有依賴項
+- ✅ 檢查 LibreOffice 安裝
+- ✅ 提供針對性建議
+
+### 📖 完整疑難排解指南
+
+遇到問題時，請參考：
+
+**[MCP_TROUBLESHOOTING.md](../MCP_TROUBLESHOOTING.md)** - 完整疑難排解指南
+
+內容包含：
+- 詳細錯誤訊息解讀
+- 常見問題解決方案
+- 依賴項安裝指引
+- 進階診斷方法
+
+### 快速參考
 
 ### 問題 1: MCP Server 未出現在 Claude Desktop
 
@@ -237,15 +307,17 @@ pip install mcp Pillow pypdf docx2pdf pdf2docx reportlab
 3. 確認 `cwd` 路徑是絕對路徑
 4. 重啟 Claude Desktop
 
-### 問題 2: 工具執行失敗
+### 問題 2: 轉換功能失敗
 
-**可能原因:**
-1. 檔案太大（檢查限制）
-2. 缺少依賴套件（重新安裝）
-3. Python 版本太舊（需要 ≥ 3.10）
+**立即執行：**
+```
+使用 check_system 工具檢查系統狀態
+```
 
-**檢查日誌:**
-Claude Desktop 的 Developer Tools 中可以查看錯誤訊息。
+**常見原因：**
+1. 缺少依賴套件（docx2pdf、pdf2docx、reportlab）
+2. LibreOffice 未安裝（Linux/Mac）
+3. 檔案格式不支援（如掃描版 PDF）
 
 ### 問題 3: PDF 轉換失敗（Windows）
 

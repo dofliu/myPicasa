@@ -48,7 +48,86 @@ Python 版本: 3.8.10
 
 ## ❌ 常見問題
 
-### 1. Word 轉 PDF 失敗
+### 1. 圖片拼接/GIF/壓縮失敗 ⭐ 新增
+
+**症狀：**
+```
+❌ 圖片 #1 驗證失敗
+錯誤: cannot identify image file
+或
+Base64 解碼失敗
+```
+
+**原因：**
+- Base64 資料格式錯誤（包含換行符或特殊字符）
+- Base64 資料不完整
+- 圖片檔案損壞或格式不支援
+
+**解決方案：**
+
+#### 正確的 Base64 生成方式
+
+**✅ 推薦方式（Python）：**
+```python
+import base64
+with open('image.jpg', 'rb') as f:
+    b64_data = base64.b64encode(f.read()).decode('utf-8')
+```
+
+**✅ Shell 命令（單行）：**
+```bash
+base64 -w 0 image.jpg > image.b64
+# 或直接取得內容
+cat image.jpg | base64 -w 0
+```
+
+**❌ 錯誤方式：**
+```bash
+# 錯誤：包含換行符
+base64 image.jpg  # 預設每76字符換行
+
+# 錯誤：使用 shell 變數可能截斷
+img_data=$(cat /tmp/img.b64)  # 可能被截斷
+```
+
+#### Claude Desktop 使用建議
+
+當 Claude AI 嘗試使用 shell 命令生成 base64 時：
+
+1. **使用 -w 0 選項** - 禁止換行
+2. **儲存到檔案** - 避免 shell 變數截斷
+3. **使用完整路徑** - 確保檔案存取正確
+
+**範例（Claude AI 應該使用的方式）：**
+```bash
+# 方式 1：儲存到檔案
+base64 -w 0 /path/to/image.jpg > /tmp/img1.b64
+
+# 方式 2：Python 方式（更可靠）
+python3 << 'EOF'
+import base64
+with open('/path/to/image.jpg', 'rb') as f:
+    print(base64.b64encode(f.read()).decode('utf-8'))
+EOF
+```
+
+#### 驗證 Base64 資料
+
+在呼叫 MCP 工具前，可先驗證 base64 資料：
+```bash
+# 檢查是否包含換行符
+cat image.b64 | wc -l  # 應該是 1
+
+# 檢查長度是否合理（圖片大小 * 1.37）
+cat image.b64 | wc -c
+
+# 測試解碼
+base64 -d image.b64 > test.jpg && file test.jpg
+```
+
+---
+
+### 2. Word 轉 PDF 失敗
 
 **症狀：**
 ```
@@ -89,7 +168,7 @@ brew install libreoffice
 
 ---
 
-### 2. PDF 轉 Word 失敗
+### 3. PDF 轉 Word 失敗
 
 **症狀：**
 ```
@@ -116,7 +195,7 @@ pip install pdf2docx
 
 ---
 
-### 3. PDF 合併功能缺少目錄或頁碼
+### 4. PDF 合併功能缺少目錄或頁碼
 
 **症狀：**
 合併 PDF 成功，但沒有生成目錄或頁碼。
@@ -281,7 +360,25 @@ soffice --version
 
 ## 🔄 版本更新記錄
 
-### v1.1 (本次更新)
+### v1.2 (本次更新) ⭐
+
+**圖片處理重大改進：**
+- ✅ **Base64 資料清理** - 自動移除換行符和空白字符
+- ✅ **圖片格式驗證** - 保存後立即驗證圖片完整性
+- ✅ **詳細錯誤診斷** - 準確定位 Base64 或圖片格式問題
+- ✅ **檔案完整性檢查** - 驗證檔案大小和可讀性
+
+**影響的功能：**
+- 圖片拼接（merge_images）
+- GIF 創建（create_gif）
+- 圖片壓縮（compress_images）
+
+**解決的問題：**
+- ❌ "cannot identify image file" 錯誤
+- ❌ Base64 解碼失敗
+- ❌ 檔案損壞或格式不支援
+
+### v1.1
 
 **新功能：**
 - ✅ 添加 `check_system` 診斷工具

@@ -56,23 +56,77 @@ def validate_file_size(file_path: str, max_size: int, file_type: str) -> None:
 
 def save_base64_file(base64_data: str, suffix: str) -> str:
     """保存 base64 編碼的檔案到臨時位置"""
-    # 移除可能的 data URL 前綴
-    if ',' in base64_data:
-        base64_data = base64_data.split(',', 1)[1]
+    try:
+        # 移除可能的 data URL 前綴
+        if ',' in base64_data:
+            base64_data = base64_data.split(',', 1)[1]
 
-    file_data = base64.b64decode(base64_data)
+        # 清理 base64 字符串（移除換行符和空白字符）
+        base64_data = base64_data.strip().replace('\n', '').replace('\r', '').replace(' ', '')
 
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    temp_file.write(file_data)
-    temp_file.close()
+        # 解碼
+        file_data = base64.b64decode(base64_data)
 
-    return temp_file.name
+        if len(file_data) == 0:
+            raise ValueError("Base64 解碼後檔案為空")
+
+        # 保存到臨時檔案
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        temp_file.write(file_data)
+        temp_file.close()
+
+        # 驗證檔案是否存在且有內容
+        if not os.path.exists(temp_file.name):
+            raise ValueError(f"臨時檔案保存失敗: {temp_file.name}")
+
+        if os.path.getsize(temp_file.name) == 0:
+            os.unlink(temp_file.name)
+            raise ValueError("保存的檔案大小為 0")
+
+        return temp_file.name
+
+    except base64.binascii.Error as e:
+        raise ValueError(f"Base64 解碼失敗: {str(e)}. 請確認資料格式正確")
+    except Exception as e:
+        raise ValueError(f"檔案保存失敗: {str(e)}")
 
 
 def file_to_base64(file_path: str) -> str:
     """將檔案轉換為 base64"""
     with open(file_path, 'rb') as f:
         return base64.b64encode(f.read()).decode('utf-8')
+
+
+def validate_image_file(file_path: str) -> tuple[bool, str]:
+    """
+    驗證圖片檔案是否有效
+
+    Returns:
+        (is_valid, error_message)
+    """
+    try:
+        if not os.path.exists(file_path):
+            return False, f"檔案不存在: {file_path}"
+
+        file_size = os.path.getsize(file_path)
+        if file_size == 0:
+            return False, f"檔案大小為 0: {file_path}"
+
+        # 嘗試用 PIL 打開圖片
+        with Image.open(file_path) as img:
+            # 驗證圖片格式
+            img.verify()
+
+        # 再次打開以確保可以讀取
+        with Image.open(file_path) as img:
+            img.load()
+
+        return True, ""
+
+    except Image.UnidentifiedImageError:
+        return False, f"無法識別的圖片格式 (檔案大小: {file_size} bytes)"
+    except Exception as e:
+        return False, f"圖片驗證失敗: {str(e)} (檔案大小: {file_size} bytes)"
 
 
 def get_diagnostic_info() -> str:
@@ -520,13 +574,62 @@ async def handle_merge_images(arguments: dict) -> list[TextContent | ImageConten
     # 保存所有圖片
     image_paths = []
     try:
+        # 步驟1：保存並驗證所有圖片
         for i, img_data in enumerate(image_files_data):
-            img_path = save_base64_file(img_data, f"_{i}.png")
-            validate_file_size(img_path, MAX_IMAGE_SIZE, f"圖片 #{i+1}")
-            image_paths.append(img_path)
+            try:
+                # 保存檔案
+                img_path = save_base64_file(img_data, f"_{i}.jpg")
 
-        # 拼接圖片
-        images = [Image.open(p) for p in image_paths]
+                # 驗證檔案大小
+                validate_file_size(img_path, MAX_IMAGE_SIZE, f"圖片 #{i+1}")
+
+                # 驗證圖片格式
+                is_valid, error_msg = validate_image_file(img_path)
+                if not is_valid:
+                    os.unlink(img_path)
+                    return [TextContent(
+                        type="text",
+                        text=f"❌ 圖片 #{i+1} 驗證失敗\n\n{error_msg}\n\n"
+                             f"提示：\n"
+                             f"1. 請確認上傳的是有效的圖片檔案（JPG, PNG, GIF, WebP）\n"
+                             f"2. 圖片檔案未損壞\n"
+                             f"3. Base64 編碼正確（檢查是否包含完整的圖片資料）\n"
+                             f"4. 如使用 shell 命令，請確保 base64 資料正確擷取"
+                    )]
+
+                image_paths.append(img_path)
+
+            except ValueError as e:
+                # Base64 解碼或檔案保存錯誤
+                # 清理已保存的檔案
+                for path in image_paths:
+                    if os.path.exists(path):
+                        os.unlink(path)
+                return [TextContent(
+                    type="text",
+                    text=f"❌ 圖片 #{i+1} 處理失敗\n\n{str(e)}\n\n"
+                         f"常見原因：\n"
+                         f"1. Base64 資料格式錯誤（包含換行符或特殊字符）\n"
+                         f"2. Base64 資料不完整\n"
+                         f"3. 資料編碼方式不正確\n\n"
+                         f"建議：請確認 Base64 編碼是否正確生成"
+                )]
+
+        # 步驟2：打開所有圖片
+        images = []
+        for i, p in enumerate(image_paths):
+            try:
+                img = Image.open(p)
+                images.append(img)
+            except Exception as e:
+                # 清理
+                for path in image_paths:
+                    if os.path.exists(path):
+                        os.unlink(path)
+                return [TextContent(
+                    type="text",
+                    text=f"❌ 無法打開圖片 #{i+1}: {p}\n\n錯誤: {str(e)}"
+                )]
         min_w = min(img.width for img in images)
         min_h = min(img.height for img in images)
 
@@ -589,12 +692,32 @@ async def handle_create_gif(arguments: dict) -> list[TextContent | ImageContent]
     # 保存所有圖片
     image_paths = []
     try:
+        # 步驟1：保存並驗證所有圖片
         for i, img_data in enumerate(image_files_data):
-            img_path = save_base64_file(img_data, f"_{i}.png")
-            validate_file_size(img_path, MAX_IMAGE_SIZE, f"圖片 #{i+1}")
-            image_paths.append(img_path)
+            try:
+                img_path = save_base64_file(img_data, f"_{i}.jpg")
+                validate_file_size(img_path, MAX_IMAGE_SIZE, f"圖片 #{i+1}")
 
-        # 載入圖片
+                # 驗證圖片
+                is_valid, error_msg = validate_image_file(img_path)
+                if not is_valid:
+                    os.unlink(img_path)
+                    for path in image_paths:
+                        os.unlink(path)
+                    return [TextContent(
+                        type="text",
+                        text=f"❌ 圖片 #{i+1} 驗證失敗: {error_msg}"
+                    )]
+
+                image_paths.append(img_path)
+
+            except ValueError as e:
+                for path in image_paths:
+                    if os.path.exists(path):
+                        os.unlink(path)
+                return [TextContent(type="text", text=f"❌ 圖片 #{i+1} 處理失敗: {str(e)}")]
+
+        # 步驟2：載入圖片
         images = [Image.open(p) for p in image_paths]
 
         # 統一大小
@@ -658,11 +781,33 @@ async def handle_compress_images(arguments: dict) -> list[TextContent]:
         total_original = 0
         total_compressed = 0
 
+        # 步驟1：保存並驗證所有圖片
         for i, img_data in enumerate(image_files_data):
-            img_path = save_base64_file(img_data, f"_{i}.png")
-            validate_file_size(img_path, MAX_IMAGE_SIZE, f"圖片 #{i+1}")
-            image_paths.append(img_path)
+            try:
+                img_path = save_base64_file(img_data, f"_{i}.jpg")
+                validate_file_size(img_path, MAX_IMAGE_SIZE, f"圖片 #{i+1}")
 
+                # 驗證圖片
+                is_valid, error_msg = validate_image_file(img_path)
+                if not is_valid:
+                    os.unlink(img_path)
+                    for path in image_paths:
+                        os.unlink(path)
+                    return [TextContent(
+                        type="text",
+                        text=f"❌ 圖片 #{i+1} 驗證失敗: {error_msg}"
+                    )]
+
+                image_paths.append(img_path)
+
+            except ValueError as e:
+                for path in image_paths:
+                    if os.path.exists(path):
+                        os.unlink(path)
+                return [TextContent(type="text", text=f"❌ 圖片 #{i+1} 處理失敗: {str(e)}")]
+
+        # 步驟2：壓縮所有圖片
+        for i, img_path in enumerate(image_paths):
             # 壓縮
             img = Image.open(img_path)
             orig_size = os.path.getsize(img_path)

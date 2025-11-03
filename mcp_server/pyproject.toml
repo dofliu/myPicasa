@@ -1,0 +1,25 @@
+[project]
+name = "media-toolkit-mcp"
+version = "1.0.0"
+description = "MediaToolkit MCP Server - 文檔和圖片處理工具（輕量級）"
+authors = [
+    {name = "Dof Liu AI工作室"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "mcp>=0.1.0",
+    "Pillow>=10.0.0",
+    "pypdf>=3.0.0",
+    "docx2pdf>=0.1.8",
+    "pdf2docx>=0.5.6",
+    "reportlab>=4.0.0",
+]
+
+[project.scripts]
+media-toolkit-mcp = "mcp_server.server:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

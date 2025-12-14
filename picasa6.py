@@ -30,6 +30,7 @@ from utils import (
     convert_image_to_pdf, detect_file_type, ensure_unlocked_pdf,
     PasswordRequiredError, WrongPasswordProvided
 )
+from utils.doc_converter import add_text_watermark_to_pdf, add_image_watermark_to_pdf
 from utils.modern_style import ModernStyle
 
 
@@ -664,6 +665,7 @@ class MediaToolkit(QMainWindow):
         self.doc_tabs.setDocumentMode(True)
         self._create_word_pdf_tab()
         self._create_pdf_merge_tab()
+        self._create_pdf_watermark_tab()
         doc_layout.addWidget(self.doc_tabs)
         
         self.category_tabs.addTab(media_widget, "🎨 圖片影像處理")
@@ -1417,6 +1419,173 @@ class MediaToolkit(QMainWindow):
         layout.addStretch()
         self.doc_tabs.addTab(tab, "🔗 PDF 合併")
 
+    def _create_pdf_watermark_tab(self):
+        """PDF 浮水印分頁"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # 檔案選擇
+        file_group = self._create_group_box("📄 選擇 PDF 文件")
+        file_layout = QVBoxLayout()
+
+        input_layout = QHBoxLayout()
+        input_layout.addWidget(QLabel("PDF 文件:"))
+        self.watermark_pdf_input = QLineEdit()
+        self.watermark_pdf_input.setPlaceholderText("選擇要添加浮水印的 PDF 文件...")
+        input_layout.addWidget(self.watermark_pdf_input)
+
+        btn_browse = QPushButton("📂 瀏覽")
+        btn_browse.setProperty("secondary", True)
+        btn_browse.clicked.connect(self._browse_watermark_pdf)
+        input_layout.addWidget(btn_browse)
+        file_layout.addLayout(input_layout)
+
+        file_group.setLayout(file_layout)
+        layout.addWidget(file_group)
+
+        # 浮水印類型選擇
+        from PyQt5.QtWidgets import QRadioButton, QButtonGroup
+        type_group = self._create_group_box("🏷️ 浮水印類型")
+        type_layout = QVBoxLayout()
+
+        self.watermark_type_group = QButtonGroup()
+        self.watermark_text_radio = QRadioButton("文字浮水印")
+        self.watermark_image_radio = QRadioButton("圖片浮水印")
+        self.watermark_text_radio.setChecked(True)
+
+        self.watermark_type_group.addButton(self.watermark_text_radio)
+        self.watermark_type_group.addButton(self.watermark_image_radio)
+
+        self.watermark_text_radio.toggled.connect(self._toggle_watermark_type)
+
+        type_layout.addWidget(self.watermark_text_radio)
+        type_layout.addWidget(self.watermark_image_radio)
+        type_group.setLayout(type_layout)
+        layout.addWidget(type_group)
+
+        # 文字浮水印設定
+        self.text_watermark_group = self._create_group_box("📝 文字浮水印設定")
+        text_layout = QVBoxLayout()
+
+        # 浮水印文字
+        text_input_layout = QHBoxLayout()
+        text_input_layout.addWidget(QLabel("浮水印文字:"))
+        self.watermark_text_input = QLineEdit("© 2025 Confidential")
+        self.watermark_text_input.setPlaceholderText("輸入浮水印文字...")
+        text_input_layout.addWidget(self.watermark_text_input)
+        text_layout.addLayout(text_input_layout)
+
+        # 字體大小
+        from PyQt5.QtWidgets import QSpinBox, QSlider
+        size_layout = QHBoxLayout()
+        size_layout.addWidget(QLabel("字體大小:"))
+        self.watermark_font_size = QSpinBox()
+        self.watermark_font_size.setRange(10, 200)
+        self.watermark_font_size.setValue(40)
+        size_layout.addWidget(self.watermark_font_size)
+        size_layout.addStretch()
+        text_layout.addLayout(size_layout)
+
+        # 旋轉角度
+        rotation_layout = QHBoxLayout()
+        rotation_layout.addWidget(QLabel("旋轉角度:"))
+        self.watermark_rotation = QSpinBox()
+        self.watermark_rotation.setRange(-180, 180)
+        self.watermark_rotation.setValue(45)
+        self.watermark_rotation.setSuffix("°")
+        rotation_layout.addWidget(self.watermark_rotation)
+        rotation_layout.addStretch()
+        text_layout.addLayout(rotation_layout)
+
+        self.text_watermark_group.setLayout(text_layout)
+        layout.addWidget(self.text_watermark_group)
+
+        # 圖片浮水印設定
+        self.image_watermark_group = self._create_group_box("🖼️ 圖片浮水印設定")
+        image_layout = QVBoxLayout()
+
+        # 選擇浮水印圖片
+        image_input_layout = QHBoxLayout()
+        image_input_layout.addWidget(QLabel("浮水印圖片:"))
+        self.watermark_image_input = QLineEdit()
+        self.watermark_image_input.setPlaceholderText("選擇浮水印圖片（PNG 格式支援透明背景）...")
+        image_input_layout.addWidget(self.watermark_image_input)
+
+        btn_browse_img = QPushButton("📂 瀏覽")
+        btn_browse_img.setProperty("secondary", True)
+        btn_browse_img.clicked.connect(self._browse_watermark_image)
+        image_input_layout.addWidget(btn_browse_img)
+        image_layout.addLayout(image_input_layout)
+
+        # 縮放比例
+        scale_layout = QHBoxLayout()
+        scale_layout.addWidget(QLabel("縮放比例:"))
+        self.watermark_scale_slider = QSlider(Qt.Horizontal)
+        self.watermark_scale_slider.setRange(5, 50)
+        self.watermark_scale_slider.setValue(20)
+        self.watermark_scale_slider.valueChanged.connect(self._update_scale_label)
+        scale_layout.addWidget(self.watermark_scale_slider)
+        self.watermark_scale_label = QLabel("20%")
+        self.watermark_scale_label.setFixedWidth(50)
+        scale_layout.addWidget(self.watermark_scale_label)
+        image_layout.addLayout(scale_layout)
+
+        self.image_watermark_group.setLayout(image_layout)
+        self.image_watermark_group.setVisible(False)
+        layout.addWidget(self.image_watermark_group)
+
+        # 通用設定
+        common_group = self._create_group_box("⚙️ 通用設定")
+        common_layout = QVBoxLayout()
+
+        # 位置選擇
+        position_layout = QHBoxLayout()
+        position_layout.addWidget(QLabel("浮水印位置:"))
+        self.watermark_position = QComboBox()
+        self.watermark_position.addItems([
+            "正中央", "左上角", "右上角", "左下角", "右下角"
+        ])
+        position_layout.addWidget(self.watermark_position)
+        position_layout.addStretch()
+        common_layout.addLayout(position_layout)
+
+        # 透明度
+        opacity_layout = QHBoxLayout()
+        opacity_layout.addWidget(QLabel("透明度:"))
+        self.watermark_opacity_slider = QSlider(Qt.Horizontal)
+        self.watermark_opacity_slider.setRange(10, 100)
+        self.watermark_opacity_slider.setValue(30)
+        self.watermark_opacity_slider.valueChanged.connect(self._update_opacity_label)
+        opacity_layout.addWidget(self.watermark_opacity_slider)
+        self.watermark_opacity_label = QLabel("30%")
+        self.watermark_opacity_label.setFixedWidth(50)
+        opacity_layout.addWidget(self.watermark_opacity_label)
+        common_layout.addLayout(opacity_layout)
+
+        # 邊距調整
+        from PyQt5.QtWidgets import QSpinBox
+        margin_layout = QHBoxLayout()
+        margin_layout.addWidget(QLabel("邊距 (px):"))
+        self.watermark_margin = QSpinBox()
+        self.watermark_margin.setRange(0, 100)
+        self.watermark_margin.setValue(10)
+        self.watermark_margin.setToolTip("浮水印到頁面邊緣的距離（像素）")
+        margin_layout.addWidget(self.watermark_margin)
+        margin_layout.addStretch()
+        common_layout.addLayout(margin_layout)
+
+        common_group.setLayout(common_layout)
+        layout.addWidget(common_group)
+
+        # 按鈕
+        btn = QPushButton("✨ 添加浮水印")
+        btn.clicked.connect(self._add_pdf_watermark)
+        btn.setMinimumHeight(44)
+        layout.addWidget(btn)
+
+        layout.addStretch()
+        self.doc_tabs.addTab(tab, "🏷️ PDF 浮水印")
+
     def _create_group_box(self, title):
         """創建群組框"""
         group = QGroupBox(title)
@@ -2167,6 +2336,113 @@ class MediaToolkit(QMainWindow):
 
         summary.append(f"輸出檔案：{output}")
         self._show_merge_summary(summary)
+
+    # === PDF 浮水印方法 ===
+    def _browse_watermark_pdf(self):
+        """選擇要添加浮水印的 PDF 文件"""
+        start_dir = self.config.get('pdf.last_folder', '')
+        file, _ = QFileDialog.getOpenFileName(
+            self, "選擇 PDF 文件", start_dir or "", "PDF 文件 (*.pdf)"
+        )
+        if file:
+            self.watermark_pdf_input.setText(file)
+            self._remember_folder('pdf.last_folder', file)
+
+    def _browse_watermark_image(self):
+        """選擇浮水印圖片"""
+        start_dir = self.config.get('image.last_folder', '')
+        file, _ = QFileDialog.getOpenFileName(
+            self, "選擇浮水印圖片", start_dir or "",
+            "圖片檔案 (*.png *.jpg *.jpeg *.bmp)"
+        )
+        if file:
+            self.watermark_image_input.setText(file)
+            self._remember_folder('image.last_folder', file)
+
+    def _toggle_watermark_type(self):
+        """切換浮水印類型"""
+        is_text = self.watermark_text_radio.isChecked()
+        self.text_watermark_group.setVisible(is_text)
+        self.image_watermark_group.setVisible(not is_text)
+
+    def _update_opacity_label(self, value):
+        """更新透明度標籤"""
+        self.watermark_opacity_label.setText(f"{value}%")
+
+    def _update_scale_label(self, value):
+        """更新縮放比例標籤"""
+        self.watermark_scale_label.setText(f"{value}%")
+
+    def _add_pdf_watermark(self):
+        """添加 PDF 浮水印"""
+        pdf_path = self.watermark_pdf_input.text()
+        if not pdf_path or not os.path.exists(pdf_path):
+            self.show_warning("請先選擇有效的 PDF 文件")
+            return
+
+        # 檢查浮水印類型
+        is_text = self.watermark_text_radio.isChecked()
+
+        if is_text:
+            # 文字浮水印
+            watermark_text = self.watermark_text_input.text()
+            if not watermark_text.strip():
+                self.show_warning("請輸入浮水印文字")
+                return
+        else:
+            # 圖片浮水印
+            watermark_image = self.watermark_image_input.text()
+            if not watermark_image or not os.path.exists(watermark_image):
+                self.show_warning("請選擇有效的浮水印圖片")
+                return
+
+        # 選擇輸出路徑
+        default_name = os.path.splitext(os.path.basename(pdf_path))[0] + "_watermarked.pdf"
+        output_path, _ = QFileDialog.getSaveFileName(
+            self, "儲存 PDF", default_name, "PDF 文件 (*.pdf)"
+        )
+        if not output_path:
+            return
+
+        # 獲取設定參數
+        position_map = {
+            "正中央": "center",
+            "左上角": "top-left",
+            "右上角": "top-right",
+            "左下角": "bottom-left",
+            "右下角": "bottom-right"
+        }
+        position = position_map.get(self.watermark_position.currentText(), "center")
+        opacity = self.watermark_opacity_slider.value() / 100.0
+        margin = self.watermark_margin.value()
+
+        try:
+            if is_text:
+                # 添加文字浮水印
+                font_size = self.watermark_font_size.value()
+                rotation = self.watermark_rotation.value()
+                success = add_text_watermark_to_pdf(
+                    pdf_path, output_path, watermark_text,
+                    position=position, opacity=opacity,
+                    font_size=font_size, rotation=rotation,
+                    margin=margin
+                )
+            else:
+                # 添加圖片浮水印
+                scale = self.watermark_scale_slider.value() / 100.0
+                success = add_image_watermark_to_pdf(
+                    pdf_path, output_path, watermark_image,
+                    position=position, opacity=opacity, scale=scale,
+                    margin=margin
+                )
+
+            if success:
+                self.show_info(f"PDF 浮水印添加完成！\n\n輸出檔案：{output_path}")
+            else:
+                self.show_error("PDF 浮水印添加失敗，請查看錯誤訊息")
+
+        except Exception as e:
+            self.show_error(f"添加 PDF 浮水印時發生錯誤：\n{str(e)}")
 
     # === 影片轉 GIF 方法 ===
     def _select_video_for_gif(self):

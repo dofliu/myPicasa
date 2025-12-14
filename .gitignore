@@ -38,6 +38,7 @@ env/
 .coverage
 htmlcov/
 .tox/
+watermarked_images
 
 # Project specific
 *.mp4
@@ -49,6 +50,7 @@ htmlcov/
 converted_images/
 output/
 temp/
+.claude
 
 # Keep the example merged_video.mp4
 !merged_video.mp4

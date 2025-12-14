@@ -617,3 +617,223 @@ def get_pdf_info(pdf_path):
     except Exception as e:
         print(f"無法讀取 PDF 資訊: {e}")
         return {'pages': 0, 'size_mb': 0, 'encrypted': False}
+
+
+def add_text_watermark_to_pdf(input_path, output_path, watermark_text,
+                               position='center', opacity=0.3, font_size=40,
+                               color=(128, 128, 128), rotation=45, margin=10):
+    """
+    為 PDF 文件添加文字浮水印
+
+    Args:
+        input_path: 輸入 PDF 路徑
+        output_path: 輸出 PDF 路徑
+        watermark_text: 浮水印文字
+        position: 位置 ('center', 'top-left', 'top-right', 'bottom-left', 'bottom-right')
+        opacity: 透明度 (0.0-1.0)
+        font_size: 字體大小
+        color: 顏色 (R, G, B) tuple
+        rotation: 旋轉角度
+        margin: 邊距（像素）
+
+    Returns:
+        bool: 是否成功
+    """
+    if not HAS_PYPDF or not HAS_REPORTLAB:
+        print("錯誤: 需要 pypdf 和 reportlab 套件")
+        return False
+
+    try:
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.colors import Color
+
+        # 設定中文字型
+        font_name = setup_fonts()
+
+        reader = pypdf.PdfReader(input_path)
+        writer = pypdf.PdfWriter()
+
+        for page_num, page in enumerate(reader.pages):
+            # 創建浮水印
+            temp_pdf = tempfile.mktemp(suffix='.pdf')
+
+            # 獲取頁面尺寸
+            page_width = float(page.mediabox.width)
+            page_height = float(page.mediabox.height)
+
+            c = canvas.Canvas(temp_pdf, pagesize=(page_width, page_height))
+
+            # 設定透明度和顏色
+            watermark_color = Color(color[0]/255, color[1]/255, color[2]/255, alpha=opacity)
+            c.setFillColor(watermark_color)
+            c.setFont(font_name, font_size)
+
+            # 計算位置（使用自訂邊距）
+            text_width = c.stringWidth(watermark_text, font_name, font_size)
+
+            if position == 'center':
+                x = page_width / 2
+                y = page_height / 2
+            elif position == 'top-left':
+                x = margin
+                y = page_height - margin - font_size
+            elif position == 'top-right':
+                x = page_width - text_width - margin
+                y = page_height - margin - font_size
+            elif position == 'bottom-left':
+                x = margin
+                y = margin
+            elif position == 'bottom-right':
+                x = page_width - text_width - margin
+                y = margin
+            else:
+                x = page_width / 2
+                y = page_height / 2
+
+            # 繪製旋轉的文字
+            c.saveState()
+            c.translate(x, y)
+            c.rotate(rotation)
+            c.drawString(0, 0, watermark_text)
+            c.restoreState()
+
+            c.save()
+
+            # 合併浮水印到原始頁面
+            watermark_reader = pypdf.PdfReader(temp_pdf)
+            page.merge_page(watermark_reader.pages[0])
+            writer.add_page(page)
+
+            # 清理臨時文件
+            try:
+                os.remove(temp_pdf)
+            except:
+                pass
+
+            print(f"已處理第 {page_num + 1}/{len(reader.pages)} 頁")
+
+        # 寫入輸出文件
+        with open(output_path, 'wb') as output_file:
+            writer.write(output_file)
+
+        print(f"PDF 浮水印添加完成: {output_path}")
+        return True
+
+    except Exception as e:
+        print(f"添加 PDF 浮水印失敗: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def add_image_watermark_to_pdf(input_path, output_path, watermark_image_path,
+                                position='center', opacity=0.5, scale=0.2, margin=10):
+    """
+    為 PDF 文件添加圖片浮水印
+
+    Args:
+        input_path: 輸入 PDF 路徑
+        output_path: 輸出 PDF 路徑
+        watermark_image_path: 浮水印圖片路徑
+        position: 位置 ('center', 'top-left', 'top-right', 'bottom-left', 'bottom-right')
+        opacity: 透明度 (0.0-1.0)
+        scale: 縮放比例 (相對於頁面寬度)
+        margin: 邊距（像素）
+
+    Returns:
+        bool: 是否成功
+    """
+    if not HAS_PYPDF or not HAS_REPORTLAB or not HAS_PIL:
+        print("錯誤: 需要 pypdf、reportlab 和 Pillow 套件")
+        return False
+
+    try:
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.utils import ImageReader
+
+        if not os.path.exists(watermark_image_path):
+            print(f"錯誤: 浮水印圖片不存在: {watermark_image_path}")
+            return False
+
+        reader = pypdf.PdfReader(input_path)
+        writer = pypdf.PdfWriter()
+
+        # 載入浮水印圖片
+        watermark_img = Image.open(watermark_image_path)
+        if watermark_img.mode != 'RGBA':
+            watermark_img = watermark_img.convert('RGBA')
+
+        for page_num, page in enumerate(reader.pages):
+            # 創建浮水印
+            temp_pdf = tempfile.mktemp(suffix='.pdf')
+
+            # 獲取頁面尺寸
+            page_width = float(page.mediabox.width)
+            page_height = float(page.mediabox.height)
+
+            c = canvas.Canvas(temp_pdf, pagesize=(page_width, page_height))
+
+            # 計算浮水印尺寸
+            wm_width = page_width * scale
+            wm_height = watermark_img.height * wm_width / watermark_img.width
+
+            # 調整透明度
+            if opacity < 1.0:
+                alpha = watermark_img.split()[3]
+                alpha = alpha.point(lambda p: int(p * opacity))
+                watermark_img.putalpha(alpha)
+
+            # 計算位置（使用自訂邊距）
+            if position == 'center':
+                x = (page_width - wm_width) / 2
+                y = (page_height - wm_height) / 2
+            elif position == 'top-left':
+                x = margin
+                y = page_height - wm_height - margin
+            elif position == 'top-right':
+                x = page_width - wm_width - margin
+                y = page_height - wm_height - margin
+            elif position == 'bottom-left':
+                x = margin
+                y = margin
+            elif position == 'bottom-right':
+                x = page_width - wm_width - margin
+                y = margin
+            else:
+                x = (page_width - wm_width) / 2
+                y = (page_height - wm_height) / 2
+
+            # 儲存浮水印圖片到臨時文件
+            temp_img = tempfile.mktemp(suffix='.png')
+            watermark_img.save(temp_img, 'PNG')
+
+            # 繪製圖片
+            c.drawImage(temp_img, x, y, width=wm_width, height=wm_height, mask='auto')
+            c.save()
+
+            # 合併浮水印到原始頁面
+            watermark_reader = pypdf.PdfReader(temp_pdf)
+            page.merge_page(watermark_reader.pages[0])
+            writer.add_page(page)
+
+            # 清理臨時文件
+            try:
+                os.remove(temp_pdf)
+                os.remove(temp_img)
+            except:
+                pass
+
+            print(f"已處理第 {page_num + 1}/{len(reader.pages)} 頁")
+
+        # 寫入輸出文件
+        with open(output_path, 'wb') as output_file:
+            writer.write(output_file)
+
+        print(f"PDF 圖片浮水印添加完成: {output_path}")
+        return True
+
+    except Exception as e:
+        print(f"添加 PDF 圖片浮水印失敗: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False

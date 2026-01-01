@@ -5,6 +5,10 @@
 Copyright © 2025 Dof Liu AI工作室
 """
 import json
+import logging
+
+# 設定 logger
+logger = logging.getLogger(__name__)
 import os
 from pathlib import Path
 
@@ -98,13 +102,13 @@ class ConfigManager:
 
                 # 合併預設配置（處理新增的配置項）
                 config = self._merge_config(self.default_config, loaded_config)
-                print(f"✓ 已載入配置: {self.config_file}")
+                logger.info(f"✓ 已載入配置: {self.config_file}")
                 return config
             except Exception as e:
-                print(f"✗ 載入配置失敗: {e}")
+                logger.error(f"✗ 載入配置失敗: {e}")
                 return self.default_config.copy()
         else:
-            print("✓ 使用預設配置")
+            logger.info("✓ 使用預設配置")
             return self.default_config.copy()
 
     def _merge_config(self, default, loaded):
@@ -126,10 +130,10 @@ class ConfigManager:
         try:
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=2, ensure_ascii=False)
-            print(f"✓ 配置已保存: {self.config_file}")
+            logger.info(f"✓ 配置已保存: {self.config_file}")
             return True
         except Exception as e:
-            print(f"✗ 保存配置失敗: {e}")
+            logger.error(f"✗ 保存配置失敗: {e}")
             return False
 
     # === 便捷方法 ===
@@ -202,7 +206,7 @@ class ConfigManager:
         """重置為預設配置"""
         self.config = self._get_default_config()
         self.save_config()
-        print("✓ 配置已重置為預設值")
+        logger.info("✓ 配置已重置為預設值")
 
 
 # 全域配置實例（單例模式）

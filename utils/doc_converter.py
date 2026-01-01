@@ -6,7 +6,12 @@ import os
 import platform
 import subprocess
 import shutil
+import shutil
 import tempfile
+import logging
+
+# 設定 logger
+logger = logging.getLogger(__name__)
 
 # PDF 處理庫
 try:
@@ -15,7 +20,7 @@ try:
     HAS_PYPDF = True
 except ImportError:
     HAS_PYPDF = False
-    print("警告: pypdf 未安裝，PDF 功能將受限")
+    logger.warning("警告: pypdf 未安裝，PDF 功能將受限")
 
 # Word 轉 PDF
 try:
@@ -23,7 +28,7 @@ try:
     HAS_DOCX2PDF = True
 except ImportError:
     HAS_DOCX2PDF = False
-    print("警告: docx2pdf 未安裝，Word 轉 PDF 功能將受限")
+    logger.warning("警告: docx2pdf 未安裝，Word 轉 PDF 功能將受限")
 
 # PDF 轉 Word
 try:
@@ -31,7 +36,7 @@ try:
     HAS_PDF2DOCX = True
 except ImportError:
     HAS_PDF2DOCX = False
-    print("警告: pdf2docx 未安裝，PDF 轉 Word 功能將受限")
+    logger.warning("警告: pdf2docx 未安裝，PDF 轉 Word 功能將受限")
 
 # ReportLab (PDF 生成)
 try:
@@ -43,7 +48,7 @@ try:
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
-    print("警告: reportlab 未安裝，PDF 目錄和頁碼功能將受限")
+    logger.warning("警告: reportlab 未安裝，PDF 目錄和頁碼功能將受限")
 
 
 try:
@@ -51,7 +56,7 @@ try:
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
-    print("警告: Pillow 未安裝，圖片轉 PDF 功能將受到限制。")
+    logger.warning("警告: Pillow 未安裝，圖片轉 PDF 功能將受到限制。")
 
 def check_dependencies():
     """檢查依賴項是否已安裝"""
@@ -81,7 +86,7 @@ def setup_fonts():
                     pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
                     return 'ChineseFont'
         except Exception as e:
-            print(f"字型載入錯誤: {str(e)}")
+            logger.error(f"字型載入錯誤: {str(e)}")
 
     elif system == 'Linux':
         try:
@@ -95,7 +100,7 @@ def setup_fonts():
                     pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
                     return 'ChineseFont'
         except Exception as e:
-            print(f"字型載入錯誤: {str(e)}")
+            logger.error(f"字型載入錯誤: {str(e)}")
 
     elif system == 'Darwin':  # macOS
         try:
@@ -108,7 +113,7 @@ def setup_fonts():
                     pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
                     return 'ChineseFont'
         except Exception as e:
-            print(f"字型載入錯誤: {str(e)}")
+            logger.error(f"字型載入錯誤: {str(e)}")
 
     return 'Helvetica'
 
@@ -144,7 +149,7 @@ def detect_file_type(file_path):
 def convert_image_to_pdf(image_path, pdf_path):
     """Convert a single image to PDF."""
     if not HAS_PIL:
-        print("Error: Pillow is not installed, cannot convert image to PDF.")
+        logger.error("Error: Pillow is not installed, cannot convert image to PDF.")
         return False
     try:
         with Image.open(image_path) as img:
@@ -153,7 +158,7 @@ def convert_image_to_pdf(image_path, pdf_path):
             img.save(pdf_path, "PDF")
         return os.path.exists(pdf_path)
     except Exception as exc:
-        print(f"Image to PDF failed: {exc}")
+        logger.error(f"Image to PDF failed: {exc}")
         return False
 
 
@@ -201,27 +206,27 @@ def convert_word_to_pdf(word_path, pdf_path):
         bool: 是否轉換成功
     """
     if not HAS_DOCX2PDF:
-        print("錯誤: 缺少 docx2pdf 套件")
+        logger.error("錯誤: 缺少 docx2pdf 套件")
         return False
 
     word_path = os.path.abspath(word_path)
     pdf_path = os.path.abspath(pdf_path)
 
-    print(f"開始轉換: {word_path} -> {pdf_path}")
+    logger.info(f"開始轉換: {word_path} -> {pdf_path}")
 
     # 方法1: 使用 docx2pdf
     try:
-        print("使用 docx2pdf 轉換...")
+        logger.info("使用 docx2pdf 轉換...")
         docx2pdf.convert(word_path, pdf_path)
         if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
-            print("轉換成功!")
+            logger.info("轉換成功!")
             return True
     except Exception as e:
-        print(f"docx2pdf 轉換失敗: {str(e)}")
+        logger.warning(f"docx2pdf 轉換失敗: {str(e)}")
 
     # 方法2: 使用 LibreOffice (如果安裝了)
     try:
-        print("嘗試使用 LibreOffice 轉換...")
+        logger.info("嘗試使用 LibreOffice 轉換...")
         system = platform.system()
 
         soffice_path = None
@@ -256,12 +261,12 @@ def convert_word_to_pdf(word_path, pdf_path):
             if os.path.exists(temp_pdf):
                 if temp_pdf != pdf_path:
                     shutil.move(temp_pdf, pdf_path)
-                print("LibreOffice 轉換成功!")
+                logger.info("LibreOffice 轉換成功!")
                 return True
     except Exception as e:
-        print(f"LibreOffice 轉換失敗: {str(e)}")
+        logger.warning(f"LibreOffice 轉換失敗: {str(e)}")
 
-    print("所有轉換方法都失敗了")
+    logger.error("所有轉換方法都失敗了")
     return False
 
 
@@ -270,30 +275,30 @@ def convert_pdf_to_word(pdf_path, word_path, password=None):
     將 PDF 轉換為 Word 檔案。
     """
     if not HAS_PDF2DOCX:
-        print("錯誤: 缺少 pdf2docx 套件")
+        logger.error("錯誤: 缺少 pdf2docx 套件")
         return False
 
     temp_pdf = None
     try:
         source_pdf, temp_pdf = ensure_unlocked_pdf(pdf_path, password=password)
-        print(f"開始轉換: {pdf_path} -> {word_path}")
+        logger.info(f"開始轉換: {pdf_path} -> {word_path}")
 
         cv = Converter(source_pdf)
         cv.convert(word_path, start=0, end=None)
         cv.close()
 
         if os.path.exists(word_path) and os.path.getsize(word_path) > 0:
-            print("PDF 轉 Word 完成!")
+            logger.info("PDF 轉 Word 完成!")
             return True
         else:
-            print("PDF 轉 Word 失敗: 輸出檔案為空")
+            logger.error("PDF 轉 Word 失敗: 輸出檔案為空")
             return False
     except PasswordRequiredError:
         raise
     except WrongPasswordProvided:
         raise
     except Exception as e:
-        print(f"PDF 轉 Word 失敗: {str(e)}")
+        logger.error(f"PDF 轉 Word 失敗: {str(e)}")
         return False
     finally:
         if temp_pdf and os.path.exists(temp_pdf):
@@ -316,17 +321,17 @@ def merge_pdfs(pdf_files, output_path, add_toc=False, add_page_numbers=False):
         bool: 是否合併成功
     """
     if not HAS_PYPDF:
-        print("錯誤: 缺少 pypdf 套件")
+        logger.error("錯誤: 缺少 pypdf 套件")
         return False
 
     if not HAS_REPORTLAB:
         if add_toc or add_page_numbers:
-            print("警告: 缺少 reportlab 套件，無法添加目錄或頁碼")
+            logger.warning("警告: 缺少 reportlab 套件，無法添加目錄或頁碼")
             add_toc = False
             add_page_numbers = False
 
     try:
-        print(f"開始合併 {len(pdf_files)} 個 PDF 文件...")
+        logger.info(f"開始合併 {len(pdf_files)} 個 PDF 文件...")
 
         # 如果需要添加目錄或頁碼，使用更複雜的流程
         if add_toc or add_page_numbers:
@@ -337,25 +342,25 @@ def merge_pdfs(pdf_files, output_path, add_toc=False, add_page_numbers=False):
 
         for pdf_file in pdf_files:
             if not os.path.exists(pdf_file):
-                print(f"警告: 文件不存在: {pdf_file}")
+                logger.warning(f"警告: 文件不存在: {pdf_file}")
                 continue
 
             try:
                 reader = pypdf.PdfReader(pdf_file)
                 for page in reader.pages:
                     merger.add_page(page)
-                print(f"✓ 已添加: {os.path.basename(pdf_file)}")
+                logger.info(f"✓ 已添加: {os.path.basename(pdf_file)}")
             except Exception as e:
-                print(f"✗ 無法處理: {os.path.basename(pdf_file)} - {e}")
+                logger.error(f"✗ 無法處理: {os.path.basename(pdf_file)} - {e}")
 
         with open(output_path, 'wb') as output_file:
             merger.write(output_file)
 
-        print(f"合併完成: {output_path}")
+        logger.info(f"合併完成: {output_path}")
         return True
 
     except Exception as e:
-        print(f"PDF 合併失敗: {str(e)}")
+        logger.error(f"PDF 合併失敗: {str(e)}")
         return False
 
 
@@ -388,7 +393,7 @@ def _merge_pdfs_with_extras(pdf_files, output_path, add_toc, add_page_numbers):
 
         for pdf_file in pdf_files:
             if not os.path.exists(pdf_file):
-                print(f"警告: 文件不存在: {pdf_file}")
+                logger.warning(f"警告: 文件不存在: {pdf_file}")
                 continue
 
             try:
@@ -402,12 +407,12 @@ def _merge_pdfs_with_extras(pdf_files, output_path, add_toc, add_page_numbers):
                     'start_page': total_pages + 1  # 如果有目錄，這個會調整
                 })
                 total_pages += page_count
-                print(f"✓ 已讀取: {os.path.basename(pdf_file)} ({page_count} 頁)")
+                logger.info(f"✓ 已讀取: {os.path.basename(pdf_file)} ({page_count} 頁)")
             except Exception as e:
-                print(f"✗ 無法讀取: {os.path.basename(pdf_file)} - {e}")
+                logger.error(f"✗ 無法讀取: {os.path.basename(pdf_file)} - {e}")
 
         if not pdf_info_list:
-            print("錯誤: 沒有有效的 PDF 文件")
+            logger.error("錯誤: 沒有有效的 PDF 文件")
             return False
 
         # 創建臨時文件
@@ -473,13 +478,13 @@ def _merge_pdfs_with_extras(pdf_files, output_path, add_toc, add_page_numbers):
             except:
                 pass
 
-        print(f"合併完成: {output_path}")
+        logger.info(f"合併完成: {output_path}")
         return True
 
     except Exception as e:
-        print(f"合併失敗: {str(e)}")
+        logger.error(f"合併失敗: {str(e)}")
         import traceback
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         return False
 
 
@@ -615,7 +620,7 @@ def get_pdf_info(pdf_path):
             'encrypted': reader.is_encrypted
         }
     except Exception as e:
-        print(f"無法讀取 PDF 資訊: {e}")
+        logger.error(f"無法讀取 PDF 資訊: {e}")
         return {'pages': 0, 'size_mb': 0, 'encrypted': False}
 
 
@@ -640,7 +645,7 @@ def add_text_watermark_to_pdf(input_path, output_path, watermark_text,
         bool: 是否成功
     """
     if not HAS_PYPDF or not HAS_REPORTLAB:
-        print("錯誤: 需要 pypdf 和 reportlab 套件")
+        logger.error("錯誤: 需要 pypdf 和 reportlab 套件")
         return False
 
     try:
@@ -716,13 +721,13 @@ def add_text_watermark_to_pdf(input_path, output_path, watermark_text,
         with open(output_path, 'wb') as output_file:
             writer.write(output_file)
 
-        print(f"PDF 浮水印添加完成: {output_path}")
+        logger.info(f"PDF 浮水印添加完成: {output_path}")
         return True
 
     except Exception as e:
-        print(f"添加 PDF 浮水印失敗: {str(e)}")
+        logger.error(f"添加 PDF 浮水印失敗: {str(e)}")
         import traceback
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         return False
 
 
@@ -744,7 +749,7 @@ def add_image_watermark_to_pdf(input_path, output_path, watermark_image_path,
         bool: 是否成功
     """
     if not HAS_PYPDF or not HAS_REPORTLAB or not HAS_PIL:
-        print("錯誤: 需要 pypdf、reportlab 和 Pillow 套件")
+        logger.error("錯誤: 需要 pypdf、reportlab 和 Pillow 套件")
         return False
 
     try:
@@ -752,7 +757,7 @@ def add_image_watermark_to_pdf(input_path, output_path, watermark_image_path,
         from reportlab.lib.utils import ImageReader
 
         if not os.path.exists(watermark_image_path):
-            print(f"錯誤: 浮水印圖片不存在: {watermark_image_path}")
+            logger.error(f"錯誤: 浮水印圖片不存在: {watermark_image_path}")
             return False
 
         reader = pypdf.PdfReader(input_path)
@@ -823,17 +828,17 @@ def add_image_watermark_to_pdf(input_path, output_path, watermark_image_path,
             except:
                 pass
 
-            print(f"已處理第 {page_num + 1}/{len(reader.pages)} 頁")
+            logger.info(f"已處理第 {page_num + 1}/{len(reader.pages)} 頁")
 
         # 寫入輸出文件
         with open(output_path, 'wb') as output_file:
             writer.write(output_file)
 
-        print(f"PDF 圖片浮水印添加完成: {output_path}")
+        logger.info(f"PDF 圖片浮水印添加完成: {output_path}")
         return True
 
     except Exception as e:
-        print(f"添加 PDF 圖片浮水印失敗: {str(e)}")
+        logger.error(f"添加 PDF 圖片浮水印失敗: {str(e)}")
         import traceback
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         return False

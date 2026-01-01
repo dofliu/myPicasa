@@ -31,7 +31,10 @@ from utils import (
     PasswordRequiredError, WrongPasswordProvided
 )
 from utils.doc_converter import add_text_watermark_to_pdf, add_image_watermark_to_pdf
+from utils.md2docx_converter import MarkdownToDocxConverter
 from utils.modern_style import ModernStyle
+from utils.task_manager import TaskManager, TaskQueueDialog
+from utils.pdf_worker import PDFToolsWorker
 
 
 class PasswordPromptCancelled(Exception):
@@ -569,6 +572,42 @@ class ImageCompressionWorker(QThread):
         self.is_cancelled = True
 
 
+class MarkdownConversionWorker(QThread):
+    """Markdown 轉換 Word 工作執行緒"""
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, input_file, output_file):
+        super().__init__()
+        self.input_file = input_file
+        self.output_file = output_file
+        self.is_cancelled = False
+
+    def run(self):
+        try:
+            self.status.emit("正在初始化轉換器...")
+            converter = MarkdownToDocxConverter()
+            
+            if self.is_cancelled:
+                self.finished.emit(False, "操作已取消")
+                return
+
+            self.status.emit("正在讀取並轉換文件...")
+            # 由於 docx 轉換是同步的且通常很快，我們這裡做一個簡單的模擬進度或者直接轉換
+            
+            converter.convert_file(self.input_file, self.output_file)
+            
+            self.progress.emit(100)
+            self.finished.emit(True, f"成功轉換為：\n{self.output_file}")
+            
+        except Exception as e:
+            self.finished.emit(False, f"轉換失敗：{str(e)}")
+
+    def cancel(self):
+        self.is_cancelled = True
+
+
 class MediaToolkit(QMainWindow):
     """多媒體與文檔處理工具套件"""
 
@@ -598,6 +637,12 @@ class MediaToolkit(QMainWindow):
         self.convert_worker = None
         self.video_to_gif_worker = None
         self.compress_worker = None
+        self.compress_worker = None
+        self.md_worker = None
+        self.pdf_tool_worker = None
+        
+        # 任務管理器
+        self.task_manager = TaskManager()
 
         # 時間追蹤
         self.operation_start_time = None
@@ -633,11 +678,17 @@ class MediaToolkit(QMainWindow):
         version_label.setStyleSheet("color: #64748B; font-size: 9pt;")
         header_layout.addWidget(version_label)
         
-        self.theme_btn = QPushButton("🌙 深色模式")
-        self.theme_btn.setProperty("secondary", True)
-        self.theme_btn.clicked.connect(self._toggle_theme)
-        self.theme_btn.setFixedWidth(120)
-        header_layout.addWidget(self.theme_btn)
+        # 頂部工具列按鈕
+        tools_layout = QHBoxLayout()
+        
+        # 任務按鈕
+        self.btn_tasks = QPushButton("📋 任務")
+        self.btn_tasks.setProperty("secondary", True)
+        self.btn_tasks.setFixedWidth(80)
+        self.btn_tasks.clicked.connect(self._show_task_manager)
+        tools_layout.addWidget(self.btn_tasks)
+
+        header_layout.addLayout(tools_layout)
         main_layout.addLayout(header_layout)
 
         # 頂層分類分頁
@@ -664,6 +715,8 @@ class MediaToolkit(QMainWindow):
         self.doc_tabs = QTabWidget()
         self.doc_tabs.setDocumentMode(True)
         self._create_word_pdf_tab()
+        self._create_markdown_tab()
+        self._create_pdf_tools_tab()
         self._create_pdf_merge_tab()
         self._create_pdf_watermark_tab()
         doc_layout.addWidget(self.doc_tabs)
@@ -1336,6 +1389,123 @@ class MediaToolkit(QMainWindow):
         
         layout.addStretch()
         self.doc_tabs.addTab(tab, "🔄 格式轉換")
+
+    def _create_markdown_tab(self):
+        """Markdown 轉 Word 分頁"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        
+        # 檔案選擇
+        file_group = self._create_group_box("📝 選擇 Markdown 文件")
+        file_layout = QVBoxLayout()
+        
+        input_layout = QHBoxLayout()
+        input_layout.addWidget(QLabel("Markdown 文件:"))
+        self.md_input = QLineEdit()
+        self.md_input.setPlaceholderText("選擇 .md 文件...")
+        input_layout.addWidget(self.md_input)
+        
+        btn_browse = QPushButton("📂 瀏覽")
+        btn_browse.setProperty("secondary", True)
+        btn_browse.clicked.connect(self._browse_markdown)
+        input_layout.addWidget(btn_browse)
+        file_layout.addLayout(input_layout)
+        
+        file_group.setLayout(file_layout)
+        layout.addWidget(file_group)
+
+        # 輸出設定
+        out_group = self._create_group_box("💾 輸出設定")
+        out_layout = QHBoxLayout()
+        out_layout.addWidget(QLabel("輸出 Word 文件:"))
+        self.docx_output = QLineEdit()
+        self.docx_output.setPlaceholderText("轉換後的 .docx 文件路徑...")
+        out_layout.addWidget(self.docx_output)
+        
+        btn_out = QPushButton("📂 瀏覽")
+        btn_out.setProperty("secondary", True)
+        btn_out.clicked.connect(self._browse_docx_output)
+        out_layout.addWidget(btn_out)
+        out_group.setLayout(out_layout)
+        layout.addWidget(out_group)
+        
+        # 進度顯示
+        self.md_progress_widget = QWidget()
+        md_progress_layout = QVBoxLayout(self.md_progress_widget)
+        md_progress_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.md_status_label = QLabel("就緒")
+        self.md_status_label.setStyleSheet("color: #64748B; font-size: 10pt;")
+        md_progress_layout.addWidget(self.md_status_label)
+
+        self.md_progress = QProgressBar()
+        self.md_progress.setTextVisible(True)
+        md_progress_layout.addWidget(self.md_progress)
+        
+        self.md_progress_widget.setVisible(False)
+        layout.addWidget(self.md_progress_widget)
+        
+        # 轉換按鈕
+        btn_convert = QPushButton("✨ 轉換為 Word")
+        btn_convert.clicked.connect(self._convert_md_to_docx)
+        btn_convert.setMinimumHeight(44)
+        layout.addWidget(btn_convert)
+        
+        layout.addStretch()
+        self.doc_tabs.addTab(tab, "📝 Markdown 轉 Word")
+
+    def _browse_markdown(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "選擇 Markdown 文件", "", "Markdown 文件 (*.md);;All Files (*)"
+        )
+        if file_path:
+            self.md_input.setText(file_path)
+            # 自動設定輸出路徑
+            base_name = os.path.splitext(file_path)[0]
+            self.docx_output.setText(f"{base_name}.docx")
+
+    def _browse_docx_output(self):
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "儲存 Word 文件", self.docx_output.text(), "Word 文件 (*.docx)"
+        )
+        if file_path:
+            self.docx_output.setText(file_path)
+
+    def _convert_md_to_docx(self):
+        md_file = self.md_input.text()
+        docx_file = self.docx_output.text()
+        
+        if not md_file or not os.path.exists(md_file):
+            QMessageBox.warning(self, "錯誤", "請選擇有效的 Markdown 文件！")
+            return
+            
+        if not docx_file:
+            QMessageBox.warning(self, "錯誤", "請設定輸出路徑！")
+            return
+            
+        # 準備 UI
+        self.md_progress_widget.setVisible(True)
+        self.md_progress.setValue(0)
+        self.md_status_label.setText("準備中...")
+        self.md_status_label.setStyleSheet("color: #64748B; font-size: 10pt;")
+        
+        # 啟動工作執行緒
+        self.md_worker = MarkdownConversionWorker(md_file, docx_file)
+        self.md_worker.status.connect(self.md_status_label.setText)
+        self.md_worker.progress.connect(self.md_progress.setValue)
+        self.md_worker.finished.connect(self._on_md_conversion_finished)
+        self.md_worker.start()
+
+    def _on_md_conversion_finished(self, success, message):
+        self.md_progress_widget.setVisible(False)
+        if success:
+            QMessageBox.information(self, "成功", message)
+            self.statusBar().showMessage("✅ 轉換完成", 5000)
+        else:
+            QMessageBox.critical(self, "錯誤", message)
+            self.md_status_label.setText("轉換失敗")
+            self.md_status_label.setStyleSheet("color: #EF4444; font-size: 10pt;")
+            self.md_progress_widget.setVisible(True)
 
     def _create_pdf_merge_tab(self):
         """PDF 合併分頁"""
@@ -2686,11 +2856,302 @@ class MediaToolkit(QMainWindow):
     def show_warning(self, msg):
         QMessageBox.warning(self, "⚠️ 警告", msg)
 
+    def _create_menus(self):
+        """建立選單列"""
+        menubar = self.menuBar()
+        menubar.clear() # Clear existing if any
+        
+        # 檔案選單
+        file_menu = menubar.addMenu('📁 檔案')
+        
+        # 開啟
+        open_action = QAction('開啟圖片...', self)
+        open_action.setShortcut('Ctrl+O')
+        open_action.triggered.connect(lambda: self.category_tabs.setCurrentIndex(0))
+        file_menu.addAction(open_action)
+
+        # 最近使用的檔案
+        self.recent_menu = file_menu.addMenu('🕒 最近使用')
+        self._update_recent_menu()
+        
+        file_menu.addSeparator()
+        
+        exit_action = QAction('離開', self)
+        exit_action.setShortcut('Ctrl+Q')
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        # 檢視選單
+        view_menu = menubar.addMenu('👁️ 檢視')
+        
+        task_action = QAction('📋 任務管理', self)
+        task_action.setShortcut('Ctrl+T')
+        task_action.triggered.connect(self._show_task_manager)
+        view_menu.addAction(task_action)
+        
+        # 說明選單
+        help_menu = menubar.addMenu('❓ 說明')
+        about_action = QAction('關於 MediaToolkit', self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+
+    def _apply_theme(self, theme=None):
+        """應用主題 (強制淺色模式)"""
+        # 強制使用淺色模式
+        self.setStyleSheet(ModernStyle.get_light_stylesheet())
+                
+    def _toggle_theme(self):
+        """切換主題 (已停用)"""
+        pass
+        
+    def _update_recent_menu(self):
+        """更新最近使用檔案清單"""
+        if not hasattr(self, 'recent_menu'):
+            return
+            
+        self.recent_menu.clear()
+        recent_files = self.config.get_recent_files()
+        
+        if not recent_files:
+            no_action = QAction("無最近記錄", self)
+            no_action.setEnabled(False)
+            self.recent_menu.addAction(no_action)
+            return
+            
+        for item in recent_files:
+            path = item["path"]
+            name = item.get("name", os.path.basename(path))
+            action = QAction(f"{name}", self)
+            action.setToolTip(path)
+            # Use default value for lambda to capture current path variable
+            action.triggered.connect(lambda checked, p=path: self._open_recent_file(p))
+            self.recent_menu.addAction(action)
+            
+        self.recent_menu.addSeparator()
+        clear_action = QAction("清除記錄", self)
+        clear_action.triggered.connect(self._clear_recent)
+        self.recent_menu.addAction(clear_action)
+        
+    def _open_recent_file(self, path):
+        """開啟最近使用的檔案"""
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "檔案不存在", f"找不到檔案：\n{path}")
+            return
+            
+        # Determine likely tab based on extension
+        ext = os.path.splitext(path)[1].lower()
+        if ext in ['.md']:
+            # Switch to Markdown tab and load
+            self.category_tabs.setCurrentIndex(1) # Document tab
+            self.doc_tabs.setCurrentIndex(1) # Markdown tab
+            if hasattr(self, 'md_input'):
+                 self.md_input.setText(path)
+                 self._suggest_docx_output(path)
+        elif ext in ['.docx']:
+            self.category_tabs.setCurrentIndex(1) 
+            self.doc_tabs.setCurrentIndex(0) # Word/PDF
+            if hasattr(self, 'word_input'):
+                self.word_input.setText(path)
+        elif ext in ['.pdf']:
+            self.category_tabs.setCurrentIndex(1)
+            # Default to Word/PDF tab
+            self.doc_tabs.setCurrentIndex(0)
+            if hasattr(self, 'pdf_input'):
+                 self.pdf_input.setText(path)
+        
+    def _clear_recent(self):
+        self.config.clear_recent()
+        self._update_recent_menu()
+
+    def _show_task_manager(self):
+        """顯示任務管理器"""
+        dialog = TaskQueueDialog(self)
+        dialog.exec_()
+        
+    def _add_task_tracking(self, worker, name):
+        """加入任務追蹤"""
+        self.task_manager.add_task(worker, name)
+        
+    def _suggest_docx_output(self, md_path):
+        """根據 Markdown 路徑建議 Docx 輸出路徑"""
+        if not md_path:
+            return
+        
+        # 預設輸出到同目錄
+        base_name = os.path.splitext(md_path)[0]
+        docx_path = f"{base_name}.docx"
+        
+        if hasattr(self, 'docx_output'):
+            self.docx_output.setText(docx_path)
+
     def show_error(self, msg):
         QMessageBox.critical(self, "❌ 錯誤", msg)
 
     def show_info(self, msg):
         QMessageBox.information(self, "✅ 完成", msg)
+
+
+
+    def _create_pdf_tools_tab(self):
+        """PDF 進階工具分頁"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(20)
+
+        # === 區塊 1: 拆分與擷取 ===
+        split_group = self._create_group_box("✂️ 拆分與擷取 PDF")
+        split_layout = QVBoxLayout()
+        
+        # 檔案選擇
+        file_layout = QHBoxLayout()
+        self.pdf_split_input = QLineEdit()
+        self.pdf_split_input.setPlaceholderText("請選擇 PDF 文件...")
+        btn_browse = QPushButton("📂 瀏覽")
+        btn_browse.clicked.connect(lambda: self._browse_pdf(self.pdf_split_input, 'pdf_split'))
+        file_layout.addWidget(self.pdf_split_input)
+        file_layout.addWidget(btn_browse)
+        split_layout.addLayout(file_layout)
+        
+        # 參數設定
+        params_layout = QHBoxLayout()
+        params_layout.addWidget(QLabel("頁碼範圍 (例如: 1-3, 5, 8):"))
+        self.pdf_split_range = QLineEdit()
+        self.pdf_split_range.setPlaceholderText("1-3, 5")
+        params_layout.addWidget(self.pdf_split_range)
+        split_layout.addLayout(params_layout)
+        
+        # 操作按鈕
+        btn_layout = QHBoxLayout()
+        
+        btn_split = QPushButton("✂️ 拆分為單一檔案")
+        btn_split.clicked.connect(lambda: self._start_pdf_tool('split'))
+        btn_layout.addWidget(btn_split)
+        
+        btn_extract = QPushButton("📑 擷取為個別檔案")
+        btn_extract.clicked.connect(lambda: self._start_pdf_tool('extract'))
+        btn_layout.addWidget(btn_extract)
+        
+        split_layout.addLayout(btn_layout)
+        split_group.setLayout(split_layout)
+        layout.addWidget(split_group)
+
+        # === 區塊 2: PDF 轉圖片 ===
+        img_group = self._create_group_box("🖼️ PDF 轉圖片")
+        img_layout = QVBoxLayout()
+        
+        # 檔案選擇
+        file_layout2 = QHBoxLayout()
+        self.pdf_img_input = QLineEdit()
+        self.pdf_img_input.setPlaceholderText("請選擇 PDF 文件...")
+        btn_browse2 = QPushButton("📂 瀏覽")
+        btn_browse2.clicked.connect(lambda: self._browse_pdf(self.pdf_img_input, 'pdf_img'))
+        file_layout2.addWidget(self.pdf_img_input)
+        file_layout2.addWidget(btn_browse2)
+        img_layout.addLayout(file_layout2)
+        
+        # 轉換參數
+        grid_layout = QHBoxLayout()
+        
+        grid_layout.addWidget(QLabel("格式:"))
+        self.pdf_img_format = QComboBox()
+        self.pdf_img_format.addItems(["png", "jpg", "jpeg"])
+        grid_layout.addWidget(self.pdf_img_format)
+        
+        grid_layout.addWidget(QLabel("DPI (解析度):"))
+        self.pdf_img_dpi = QComboBox()
+        self.pdf_img_dpi.addItems(["72 (螢幕)", "150 (一般)", "300 (列印)"])
+        self.pdf_img_dpi.setCurrentIndex(1)
+        grid_layout.addWidget(self.pdf_img_dpi)
+        
+        img_layout.addLayout(grid_layout)
+        
+        # 執行按鈕
+        btn_convert = QPushButton("🖼️ 轉為圖片")
+        btn_convert.clicked.connect(lambda: self._start_pdf_tool('to_image'))
+        img_layout.addWidget(btn_convert)
+        
+        img_group.setLayout(img_layout)
+        layout.addWidget(img_group)
+        
+        # 狀態標籤
+        self.pdf_tool_status = QLabel("就緒")
+        self.pdf_tool_status.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.pdf_tool_status)
+
+        layout.addStretch()
+        self.doc_tabs.addTab(tab, "🛠️ PDF 進階工具")
+
+    def _browse_pdf(self, input_widget, key_prefix):
+        """選擇 PDF 文件 (通用)"""
+        start_dir = self.config.get(f'document.last_{key_prefix}_folder', '')
+        file, _ = QFileDialog.getOpenFileName(
+            self, "選擇 PDF 文件", start_dir or "", "PDF 文件 (*.pdf)"
+        )
+        if file:
+            input_widget.setText(file)
+            self._remember_folder(f'document.last_{key_prefix}_folder', file)
+
+    def _start_pdf_tool(self, mode):
+        """開始 PDF 工具任務"""
+        # 取得參數
+        if mode in ['split', 'extract']:
+            input_path = self.pdf_split_input.text()
+            range_str = self.pdf_split_range.text()
+            if not input_path:
+                self.show_warning("請選擇 PDF 文件")
+                return
+            if not range_str:
+                self.show_warning("請輸入頁碼範圍")
+                return
+            
+            # 使用相同目錄
+            output_dir = os.path.dirname(input_path)
+            
+            self.pdf_tool_worker = PDFToolsWorker(
+                mode, input_path=input_path, range_str=range_str, output_dir=output_dir
+            )
+            
+        elif mode == 'to_image':
+            input_path = self.pdf_img_input.text()
+            if not input_path:
+                self.show_warning("請選擇 PDF 文件")
+                return
+                
+            fmt = self.pdf_img_format.currentText()
+            dpi_str = self.pdf_img_dpi.currentText().split(' ')[0]
+            dpi = int(dpi_str)
+            
+            # 建立子資料夾
+            base_name = os.path.splitext(os.path.basename(input_path))[0]
+            output_dir = os.path.join(os.path.dirname(input_path), f"{base_name}_images")
+            
+            self.pdf_tool_worker = PDFToolsWorker(
+                mode, input_path=input_path, output_dir=output_dir, format=fmt, dpi=dpi
+            )
+
+        # 啟動 Worker
+        self.pdf_tool_worker.status.connect(self.pdf_tool_status.setText)
+        self.pdf_tool_worker.finished.connect(self._on_pdf_tool_finished)
+        
+        task_name = {
+            'split': 'PDF 拆分',
+            'extract': 'PDF 擷取',
+            'to_image': 'PDF 轉圖片'
+        }.get(mode, 'PDF 任務')
+        
+        self._add_task_tracking(self.pdf_tool_worker, task_name)
+        self.pdf_tool_worker.start()
+        
+        self.pdf_tool_status.setText("處理中...")
+
+    def _on_pdf_tool_finished(self, success, message):
+        """PDF 工具任務完成"""
+        self.pdf_tool_status.setText("就緒" if success else "失敗")
+        if success:
+            self.show_info(message)
+        else:
+            self.show_error(message)
+
 
 
 def main():

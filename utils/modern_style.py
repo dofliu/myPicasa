@@ -1,613 +1,334 @@
 """
-現代化 UI 樣式管理模組
-提供美觀的深色和淺色主題
+現代化 UI 樣式管理模組 (Redesigned)
+提供專業、現代感的深色和淺色主題 (類似 VS Code / Modern Web 風格)
 """
-
 
 class ModernStyle:
     """現代化樣式管理類別"""
 
-    # 深色主題配色 - 優化版（更柔和的色調）
+    # 現代深色主題 (類 VS Code Dark Modern)
     DARK_THEME = {
-        'primary': '#4F96D8',      # 柔和藍色（降低飽和度）
-        'primary_dark': '#3B7AB8',
-        'primary_light': '#6AAFE8',
-        'secondary': '#9D7DC7',    # 柔和紫色
-        'success': '#4CAF8F',      # 柔和綠色
-        'warning': '#F5A644',      # 柔和橙色
-        'danger': '#E57373',       # 柔和紅色
-        'background': '#1A2332',   # 更深的背景
-        'surface': '#2D3748',      # 表面色
-        'surface_light': '#3D4B5F',
-        'text': '#E8EEF3',         # 文字色
-        'text_secondary': '#B8C5D6',
-        'border': '#3D4B5F',
-        'hover': '#3D4B5F',
+        'primary': '#3794FF',       # 鮮明的藍色
+        'primary_hover': '#1F6FEB',
+        'primary_text': '#FFFFFF',
+        
+        'background': '#181818',    # 極致深灰背景
+        'surface': '#202020',       # 卡片/容器背景
+        'surface_hover': '#2D2D2D',
+        
+        'border': '#333333',        # 微妙的邊框
+        'text': '#E8E8E8',          # 主要文字
+        'text_secondary': '#AAAAAA',# 次要文字
+        
+        'input_bg': '#2B2B2B',      # 輸入框背景
+        'selection': '#264F78',     # 選取顏色
+        'success': '#4CC38A',
+        'warning': '#D29922',
+        'danger': '#F85149',
     }
 
-    # 淺色主題配色 - 優化版（更協調的色調）
+    # 現代淺色主題 (類 Modern Windows / Clean Web)
     LIGHT_THEME = {
-        'primary': '#5B9BD5',      # 柔和藍色
-        'primary_dark': '#4682C4',
-        'primary_light': '#E3F2FD',
-        'secondary': '#9575CD',    # 柔和紫色
-        'success': '#66BB6A',      # 柔和綠色
-        'warning': '#FFA726',      # 柔和橙色
-        'danger': '#EF5350',       # 柔和紅色
-        'background': '#F5F7FA',   # 更柔和的背景
-        'surface': '#FFFFFF',      # 白色表面
-        'surface_light': '#F0F4F8',
-        'text': '#2C3E50',         # 深色文字
-        'text_secondary': '#607D8B',
-        'border': '#DDE4EC',
-        'hover': '#EBF3FC',        # 淺藍色懸停
+        'primary': '#0078D4',       # 專業藍
+        'primary_hover': '#106EBE',
+        'primary_text': '#FFFFFF',
+        
+        'background': '#F3F3F3',    # 柔和灰白背景
+        'surface': '#FFFFFF',       # 純白卡片
+        'surface_hover': '#F7F7F7',
+        
+        'border': '#E5E5E5',        # 極淡邊框
+        'text': '#242424',          # 深灰文字 (非純黑)
+        'text_secondary': '#666666',
+        
+        'input_bg': '#FFFFFF',
+        'selection': '#B3D7FF',
+        'success': '#0F7B0F',
+        'warning': '#9D5D00',
+        'danger': '#C50F1F',
     }
 
     @classmethod
-    def get_dark_stylesheet(cls):
-        """取得深色主題樣式表"""
-        colors = cls.DARK_THEME
+    def get_stylesheet(cls, theme_name="light"):
+        colors = cls.DARK_THEME if theme_name == "dark" else cls.LIGHT_THEME
+        
+        is_dark = theme_name == "dark"
+        shadow_alpha = "0.3" if is_dark else "0.05"
+        
         return f"""
-            /* 主視窗 */
-            QMainWindow {{
+            /* 全域設定 */
+            QMainWindow, QDialog {{
                 background-color: {colors['background']};
             }}
 
-            /* 中央小工具 */
             QWidget {{
-                background-color: {colors['background']};
                 color: {colors['text']};
-                font-family: "Microsoft JhengHei", "Segoe UI", Arial, sans-serif;
+                font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
                 font-size: 10pt;
             }}
 
-            /* 分頁視窗 */
+            /* 分頁 (Tabs) - Modern Pill Style */
             QTabWidget::pane {{
                 border: 1px solid {colors['border']};
                 background-color: {colors['surface']};
                 border-radius: 8px;
-                padding: 5px;
+                top: -1px; /* 連接 Tab */
             }}
 
-            QTabBar::tab {{
-                background-color: {colors['surface']};
+            QTabWidget::tab-bar {{
+                alignment: left;
+            }}
+
+            QTabBar ::tab {{
+                background: transparent;
                 color: {colors['text_secondary']};
-                border: none;
-                padding: 12px 24px;
-                margin-right: 4px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
+                padding: 8px 16px;
+                margin: 4px 2px;
+                border-radius: 6px;
                 font-weight: 500;
             }}
 
             QTabBar::tab:selected {{
-                background-color: {colors['primary']};
-                color: white;
+                background-color: {colors['surface']};
+                color: {colors['primary']};
+                font-weight: bold;
+                border-bottom: 2px solid {colors['primary']};
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
             }}
 
             QTabBar::tab:hover:!selected {{
-                background-color: {colors['hover']};
+                background-color: {colors['surface_hover']};
+                color: {colors['text']};
             }}
 
-            /* 按鈕 */
+            /* 按鈕 (Buttons) */
             QPushButton {{
                 background-color: {colors['primary']};
-                color: white;
+                color: {colors['primary_text']};
                 border: none;
                 border-radius: 6px;
-                padding: 10px 20px;
+                padding: 8px 16px;
                 font-weight: 600;
-                font-size: 10pt;
-                min-height: 20px;
+                min-height: 24px;
             }}
 
             QPushButton:hover {{
-                background-color: {colors['primary_dark']};
+                background-color: {colors['primary_hover']};
             }}
 
             QPushButton:pressed {{
-                background-color: {colors['primary_dark']};
-                padding-top: 12px;
-                padding-bottom: 8px;
+                background-color: {colors['primary']};
+                padding-top: 9px; /* 按下效果 */
+                padding-bottom: 7px;
             }}
 
             QPushButton:disabled {{
-                background-color: {colors['surface_light']};
+                background-color: {colors['border']};
                 color: {colors['text_secondary']};
             }}
 
-            /* 次要按鈕 */
+            /* 次要按鈕 / Outline Button */
             QPushButton[secondary="true"] {{
-                background-color: {colors['surface']};
+                background-color: transparent;
+                border: 1px solid {colors['border']};
                 color: {colors['text']};
-                border: 2px solid {colors['border']};
             }}
 
             QPushButton[secondary="true"]:hover {{
-                background-color: {colors['hover']};
+                background-color: {colors['surface_hover']};
+                border-color: {colors['text_secondary']};
             }}
 
-            /* 輸入框 */
-            QLineEdit {{
-                background-color: {colors['surface']};
+            /* 輸入框 (Inputs) */
+            QLineEdit, QPlainTextEdit, QTextEdit {{
+                background-color: {colors['input_bg']};
                 color: {colors['text']};
-                border: 2px solid {colors['border']};
+                border: 1px solid {colors['border']};
                 border-radius: 6px;
-                padding: 8px 12px;
-                selection-background-color: {colors['primary']};
+                padding: 8px;
+                selection-background-color: {colors['selection']};
             }}
 
-            QLineEdit:focus {{
-                border: 2px solid {colors['primary']};
+            QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {{
+                border: 1px solid {colors['primary']};
+            }}
+            
+            QLineEdit:disabled {{
+                background-color: {colors['background']};
+                color: {colors['text_secondary']};
             }}
 
-            /* 下拉選單 */
+            /* 下拉選單 (Combobox) */
             QComboBox {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border: 2px solid {colors['border']};
+                background-color: {colors['input_bg']};
+                border: 1px solid {colors['border']};
                 border-radius: 6px;
-                padding: 8px 12px;
-                min-width: 100px;
+                padding: 6px 12px;
+                min-width: 80px;
             }}
 
             QComboBox:hover {{
-                border: 2px solid {colors['primary_light']};
+                background-color: {colors['surface_hover']};
             }}
 
             QComboBox::drop-down {{
                 border: none;
-                width: 30px;
+                width: 24px;
             }}
 
             QComboBox::down-arrow {{
-                image: none;
+                image: none; /* 如果有自定義箭頭圖片可加 */
+                border-top: 5px solid {colors['text_secondary']};
                 border-left: 5px solid transparent;
                 border-right: 5px solid transparent;
-                border-top: 5px solid {colors['text']};
-                margin-right: 10px;
+                width: 0;
+                height: 0;
+                margin-right: 8px;
             }}
 
-            QComboBox QAbstractItemView {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border: 2px solid {colors['border']};
-                selection-background-color: {colors['primary']};
-                border-radius: 6px;
-                padding: 4px;
-            }}
-
-            /* 清單視窗 */
+            /* 列表 (List Widget) */
             QListWidget {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border: 2px solid {colors['border']};
+                background-color: {colors['input_bg']};
+                border: 1px solid {colors['border']};
                 border-radius: 8px;
-                padding: 8px;
+                padding: 4px;
+                outline: none;
             }}
 
             QListWidget::item {{
-                padding: 8px;
+                padding: 8px 12px;
                 border-radius: 4px;
-                margin: 2px 0;
+                margin-bottom: 2px;
             }}
 
             QListWidget::item:selected {{
-                background-color: {colors['primary']};
-                color: white;
+                background-color: {colors['selection']};
+                color: {colors['text']}; /* 保持文字顏色或變白視 selection 色而定 */
+            }}
+            
+            QListWidget::item:selected:!active {{
+                background-color: {colors['surface_hover']};
             }}
 
             QListWidget::item:hover:!selected {{
-                background-color: {colors['hover']};
+                background-color: {colors['surface_hover']};
             }}
 
-            /* 標籤 */
-            QLabel {{
-                color: {colors['text']};
-                background-color: transparent;
-                padding: 2px;
-            }}
-
-            QLabel[heading="true"] {{
-                font-size: 14pt;
-                font-weight: bold;
-                color: {colors['primary']};
-                padding: 10px 0;
-            }}
-
-            /* 選單列 */
-            QMenuBar {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border-bottom: 1px solid {colors['border']};
-                padding: 4px;
-            }}
-
-            QMenuBar::item {{
-                padding: 8px 12px;
-                border-radius: 4px;
-            }}
-
-            QMenuBar::item:selected {{
-                background-color: {colors['primary']};
-            }}
-
-            QMenu {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border: 1px solid {colors['border']};
-                border-radius: 8px;
-                padding: 8px;
-            }}
-
-            QMenu::item {{
-                padding: 8px 24px;
-                border-radius: 4px;
-            }}
-
-            QMenu::item:selected {{
-                background-color: {colors['primary']};
-            }}
-
-            /* 狀態列 */
-            QStatusBar {{
-                background-color: {colors['surface']};
-                color: {colors['text_secondary']};
-                border-top: 1px solid {colors['border']};
-                padding: 4px;
-            }}
-
-            /* 進度條 */
-            QProgressBar {{
-                background-color: {colors['surface']};
-                border: 2px solid {colors['border']};
-                border-radius: 6px;
-                text-align: center;
-                color: {colors['text']};
-                height: 24px;
-            }}
-
-            QProgressBar::chunk {{
-                background-color: {colors['primary']};
-                border-radius: 4px;
-            }}
-
-            /* 捲軸 */
-            QScrollBar:vertical {{
-                background-color: {colors['surface']};
-                width: 12px;
-                border-radius: 6px;
-            }}
-
-            QScrollBar::handle:vertical {{
-                background-color: {colors['border']};
-                border-radius: 6px;
-                min-height: 30px;
-            }}
-
-            QScrollBar::handle:vertical:hover {{
-                background-color: {colors['primary']};
-            }}
-
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                border: none;
-                background: none;
-            }}
-
-            /* 訊息框 */
-            QMessageBox {{
-                background-color: {colors['background']};
-            }}
-
-            QMessageBox QLabel {{
-                color: {colors['text']};
-            }}
-
-            QMessageBox QPushButton {{
-                min-width: 80px;
-            }}
-        """
-
-    @classmethod
-    def get_light_stylesheet(cls):
-        """取得淺色主題樣式表"""
-        colors = cls.LIGHT_THEME
-        return f"""
-            /* 主視窗 */
-            QMainWindow {{
-                background-color: {colors['background']};
-            }}
-
-            /* 中央小工具 */
-            QWidget {{
-                background-color: {colors['background']};
-                color: {colors['text']};
-                font-family: "Microsoft JhengHei", "Segoe UI", Arial, sans-serif;
-                font-size: 10pt;
-            }}
-
-            /* 分頁視窗 */
-            QTabWidget::pane {{
-                border: 1px solid {colors['border']};
-                background-color: {colors['surface']};
-                border-radius: 8px;
-                padding: 5px;
-            }}
-
-            QTabBar::tab {{
-                background-color: {colors['surface']};
-                color: {colors['text_secondary']};
-                border: none;
-                padding: 12px 24px;
-                margin-right: 4px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                font-weight: 500;
-            }}
-
-            QTabBar::tab:selected {{
-                background-color: {colors['primary']};
-                color: white;
-            }}
-
-            QTabBar::tab:hover:!selected {{
-                background-color: {colors['hover']};
-            }}
-
-            /* 按鈕 */
-            QPushButton {{
-                background-color: {colors['primary']};
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-weight: 600;
-                font-size: 10pt;
-                min-height: 20px;
-            }}
-
-            QPushButton:hover {{
-                background-color: {colors['primary_dark']};
-            }}
-
-            QPushButton:pressed {{
-                background-color: {colors['primary_dark']};
-                padding-top: 12px;
-                padding-bottom: 8px;
-            }}
-
-            QPushButton:disabled {{
-                background-color: {colors['surface_light']};
-                color: {colors['text_secondary']};
-            }}
-
-            /* 次要按鈕 */
-            QPushButton[secondary="true"] {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border: 2px solid {colors['border']};
-            }}
-
-            QPushButton[secondary="true"]:hover {{
-                background-color: {colors['hover']};
-            }}
-
-            /* 輸入框 */
-            QLineEdit {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border: 2px solid {colors['border']};
-                border-radius: 6px;
-                padding: 8px 12px;
-                selection-background-color: {colors['primary']};
-            }}
-
-            QLineEdit:focus {{
-                border: 2px solid {colors['primary']};
-            }}
-
-            /* 下拉選單 */
-            QComboBox {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border: 2px solid {colors['border']};
-                border-radius: 6px;
-                padding: 8px 12px;
-                min-width: 100px;
-            }}
-
-            QComboBox:hover {{
-                border: 2px solid {colors['primary']};
-            }}
-
-            QComboBox::drop-down {{
-                border: none;
-                width: 30px;
-            }}
-
-            QComboBox::down-arrow {{
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 5px solid {colors['text']};
-                margin-right: 10px;
-            }}
-
-            QComboBox QAbstractItemView {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border: 2px solid {colors['border']};
-                selection-background-color: {colors['primary']};
-                border-radius: 6px;
-                padding: 4px;
-            }}
-
-            /* 清單視窗 */
-            QListWidget {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border: 2px solid {colors['border']};
-                border-radius: 8px;
-                padding: 8px;
-            }}
-
-            QListWidget::item {{
-                padding: 8px;
-                border-radius: 4px;
-                margin: 2px 0;
-            }}
-
-            QListWidget::item:selected {{
-                background-color: {colors['primary']};
-                color: white;
-            }}
-
-            QListWidget::item:hover:!selected {{
-                background-color: {colors['hover']};
-            }}
-
-            /* 標籤 */
-            QLabel {{
-                color: {colors['text']};
-                background-color: transparent;
-                padding: 2px;
-            }}
-
-            QLabel[heading="true"] {{
-                font-size: 14pt;
-                font-weight: bold;
-                color: {colors['primary']};
-                padding: 10px 0;
-            }}
-
-            /* 選單列 */
-            QMenuBar {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border-bottom: 1px solid {colors['border']};
-                padding: 4px;
-            }}
-
-            QMenuBar::item {{
-                padding: 8px 12px;
-                border-radius: 4px;
-            }}
-
-            QMenuBar::item:selected {{
-                background-color: {colors['primary']};
-                color: white;
-            }}
-
-            QMenu {{
-                background-color: {colors['surface']};
-                color: {colors['text']};
-                border: 1px solid {colors['border']};
-                border-radius: 8px;
-                padding: 8px;
-            }}
-
-            QMenu::item {{
-                padding: 8px 24px;
-                border-radius: 4px;
-            }}
-
-            QMenu::item:selected {{
-                background-color: {colors['primary']};
-                color: white;
-            }}
-
-            /* 狀態列 */
-            QStatusBar {{
-                background-color: {colors['surface']};
-                color: {colors['text_secondary']};
-                border-top: 1px solid {colors['border']};
-                padding: 4px;
-            }}
-
-            /* 進度條 */
-            QProgressBar {{
-                background-color: {colors['surface']};
-                border: 2px solid {colors['border']};
-                border-radius: 6px;
-                text-align: center;
-                color: {colors['text']};
-                height: 24px;
-            }}
-
-            QProgressBar::chunk {{
-                background-color: {colors['primary']};
-                border-radius: 4px;
-            }}
-
-            /* 捲軸 */
-            QScrollBar:vertical {{
-                background-color: {colors['surface']};
-                width: 12px;
-                border-radius: 6px;
-            }}
-
-            QScrollBar::handle:vertical {{
-                background-color: {colors['border']};
-                border-radius: 6px;
-                min-height: 30px;
-            }}
-
-            QScrollBar::handle:vertical:hover {{
-                background-color: {colors['primary']};
-            }}
-
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                border: none;
-                background: none;
-            }}
-
-            /* 訊息框 */
-            QMessageBox {{
-                background-color: {colors['background']};
-            }}
-
-            QMessageBox QLabel {{
-                color: {colors['text']};
-            }}
-
-            QMessageBox QPushButton {{
-                min-width: 80px;
-            }}
-        """
-
-    @classmethod
-    def get_card_style(cls, theme="light"):
-        """Return the card-like group box stylesheet for the given theme."""
-        colors = cls.DARK_THEME if theme == "dark" else cls.LIGHT_THEME
-
-        if theme == "dark":
-            border_color = "rgba(148, 163, 184, 0.45)"
-            title_background = "rgba(96, 165, 250, 0.22)"
-            title_color = colors['text']
-        else:
-            border_color = colors['border']
-            title_background = "rgba(59, 130, 246, 0.12)"
-            title_color = colors['primary']
-
-        return f"""
+            /* 群組框 (GroupBox) - 乾淨風格 */
             QGroupBox {{
-                border: 1px solid {border_color};
-                border-radius: 14px;
-                margin-top: 18px;
-                padding: 22px 18px 18px 18px;
-                font-weight: normal;
                 background-color: {colors['surface']};
+                border: 1px solid {colors['border']};
+                border-radius: 8px;
+                margin-top: 1.5em; /* 預留標題空間 */
+                padding-top: 15px;
             }}
 
             QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 4px 14px;
-                background-color: {title_background};
+                left: 10px;
+                padding: 0 5px;
+                color: {colors['primary']};
+                font-weight: bold;
+                background-color: transparent; 
+            }}
+            
+            /* 若需要更像卡片的樣式，可透過 setProperty("card", True) */
+            
+            /* 滾動條 (Scrollbar) */
+            QScrollBar:vertical {{
+                background: {colors['background']};
+                width: 10px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {colors['border']};
+                min-height: 20px;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {colors['text_secondary']};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+
+            /* 選單列 (MenuBar) */
+            QMenuBar {{
+                background-color: {colors['surface']};
+                border-bottom: 1px solid {colors['border']};
+            }}
+            QMenuBar::item:selected {{
+                background-color: {colors['surface_hover']};
+            }}
+            
+            QMenu {{
+                background-color: {colors['surface']};
+                border: 1px solid {colors['border']};
+                padding: 5px;
+                border-radius: 6px;
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+                border-radius: 4px;
+            }}
+            QMenu::item:selected {{
+                background-color: {colors['primary']};
+                color: white;
+            }}
+
+            /* 狀態列 */
+            QStatusBar {{
+                background-color: {colors['primary']};
+                color: white;
+            }}
+        """
+
+    @classmethod
+    def get_dark_stylesheet(cls):
+        return cls.get_stylesheet("dark")
+
+    @classmethod
+    def get_light_stylesheet(cls):
+        return cls.get_stylesheet("light")
+
+    @classmethod
+    def get_card_style(cls, theme="light"):
+        """Return the card-like group box stylesheet for the given theme."""
+        colors = cls.DARK_THEME if theme == "dark" else cls.LIGHT_THEME
+        
+        # Determine specific colors for the card style
+        if theme == "dark":
+            border_color = colors['border']
+            title_bg = "rgba(55, 148, 255, 0.15)" # Primary with opacity
+            title_color = colors['primary']
+        else:
+            border_color = colors['border']
+            title_bg = "rgba(0, 120, 212, 0.1)"  # Primary with opacity
+            title_color = colors['primary']
+
+        return f"""
+            QGroupBox {{
+                background-color: {colors['surface']};
+                border: 1px solid {border_color};
+                border-radius: 8px;
+                margin-top: 24px;
+                padding-top: 24px;
+                padding-bottom: 12px;
+                padding-left: 12px;
+                padding-right: 12px;
+            }}
+
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 12px;
+                padding: 4px 12px;
+                background-color: {title_bg};
                 color: {title_color};
-                border-radius: 10px;
-                font-weight: 600;
-                left: 18px;
+                border-radius: 4px;
+                font-weight: bold;
                 border: 1px solid {border_color};
             }}
         """

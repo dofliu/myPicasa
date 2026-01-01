@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QGridLayout, QDialog, QFrame, QSizePolicy
 )
-from PyQt5.QtGui import QPixmap, QImage, QPainter, QDragEnterEvent, QDropEvent
+from PyQt5.QtGui import QPixmap, QImage, QPainter, QDragEnterEvent, QDropEvent, QTransform
 from PyQt5.QtCore import Qt, pyqtSignal, QSize
 from PIL import Image
 
@@ -80,6 +80,7 @@ class ImageThumbnail(QFrame):
                 font-weight: bold;
                 font-size: 12pt;
                 padding: 0;
+                border: none;
             }
             QPushButton:hover {
                 background-color: #DC2626;
@@ -87,6 +88,11 @@ class ImageThumbnail(QFrame):
         """)
         self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self.file_path))
         self.remove_btn.hide()  # 預設隱藏
+        
+        # 使用重疊佈局或將按鈕放在佈局上方
+        # 這裡簡單地將按鈕加入到主佈局的頂部，並透過樣式調整位置
+        # 但為了確保它浮在右上角，我們可以使用絕對定位的父容器概念，或者簡單地放在第一列
+        # 在此實作中，我們將其放在一個水平佈局中
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 0, 0, 0)
         button_row.addStretch()
@@ -156,6 +162,30 @@ class ImageThumbnail(QFrame):
         """滑鼠離開事件"""
         self.remove_btn.hide()
         super().leaveEvent(event)
+        
+    def rotate(self, angle):
+        """旋轉預覽圖"""
+        if not self.image_label.pixmap():
+            return
+            
+        current_pixmap = self.image_label.pixmap()
+        transform = QTransform().rotate(angle)
+        rotated_pixmap = current_pixmap.transformed(transform, Qt.SmoothTransformation)
+        self.image_label.setPixmap(rotated_pixmap)
+
+    def flip(self, horizontal, vertical):
+        """翻轉預覽圖"""
+        if not self.image_label.pixmap():
+            return
+            
+        current_pixmap = self.image_label.pixmap()
+        transform = QTransform()
+        scale_x = -1 if horizontal else 1
+        scale_y = -1 if vertical else 1
+        transform.scale(scale_x, scale_y)
+        
+        flipped_pixmap = current_pixmap.transformed(transform, Qt.SmoothTransformation)
+        self.image_label.setPixmap(flipped_pixmap)
 
 
 class ImagePreviewGrid(QWidget):
@@ -300,6 +330,20 @@ class ImagePreviewGrid(QWidget):
         self.thumbnails.clear()
         self._update_ui()
         self.files_changed.emit()
+    
+    def get_all_files(self):
+        """取得所有檔案路徑"""
+        return self.files.copy()
+
+    def apply_transformation(self, op_type, value):
+        """對所有縮圖應用變換效果"""
+        for thumbnail in self.thumbnails:
+            if op_type == 'rotate':
+                thumbnail.rotate(value)
+            elif op_type == 'flip':
+                 h_flip = (value == 'horizontal')
+                 v_flip = (value == 'vertical')
+                 thumbnail.flip(h_flip, v_flip)
 
     # === Drag & Drop 支援 ===
     def dragEnterEvent(self, event: QDragEnterEvent):

@@ -6,46 +6,46 @@
 class ModernStyle:
     """現代化樣式管理類別"""
 
-    # 現代深色主題 (類 VS Code Dark Modern)
+    # 現代深色主題 (優化對比度)
     DARK_THEME = {
-        'primary': '#3794FF',       # 鮮明的藍色
-        'primary_hover': '#1F6FEB',
+        'primary': '#4DABF7',       # 柔和明亮的藍色
+        'primary_hover': '#339AF0',
         'primary_text': '#FFFFFF',
         
-        'background': '#181818',    # 極致深灰背景
-        'surface': '#202020',       # 卡片/容器背景
-        'surface_hover': '#2D2D2D',
+        'background': '#1E1E2E',    # 深紫灰背景 (更柔和)
+        'surface': '#2D2D3D',       # 卡片/容器背景
+        'surface_hover': '#383850',
         
-        'border': '#333333',        # 微妙的邊框
-        'text': '#E8E8E8',          # 主要文字
-        'text_secondary': '#AAAAAA',# 次要文字
+        'border': '#454560',        # 更明顯的邊框
+        'text': '#E8E8F0',          # 柔和白色文字
+        'text_secondary': '#A0A0B0',# 次要文字 (對比度提高)
         
-        'input_bg': '#2B2B2B',      # 輸入框背景
-        'selection': '#264F78',     # 選取顏色
-        'success': '#4CC38A',
-        'warning': '#D29922',
-        'danger': '#F85149',
+        'input_bg': '#35354A',      # 輸入框背景
+        'selection': '#3A5FCD',     # 選取顏色
+        'success': '#52C878',
+        'warning': '#FFB347',
+        'danger': '#FF6B6B',
     }
 
-    # 現代淺色主題 (類 Modern Windows / Clean Web)
+    # 現代淺色主題 (清爽專業風格)
     LIGHT_THEME = {
-        'primary': '#0078D4',       # 專業藍
-        'primary_hover': '#106EBE',
+        'primary': '#2E86AB',       # 優雅的藍綠色
+        'primary_hover': '#1E6789',
         'primary_text': '#FFFFFF',
         
-        'background': '#F3F3F3',    # 柔和灰白背景
+        'background': '#F8F9FA',    # 極淺灰白背景
         'surface': '#FFFFFF',       # 純白卡片
-        'surface_hover': '#F7F7F7',
+        'surface_hover': '#F1F3F4',
         
-        'border': '#E5E5E5',        # 極淡邊框
-        'text': '#242424',          # 深灰文字 (非純黑)
-        'text_secondary': '#666666',
+        'border': '#DEE2E6',        # 柔和邊框
+        'text': '#2C3E50',          # 深灰藍文字 (易讀)
+        'text_secondary': '#5D6D7E',# 次要文字
         
         'input_bg': '#FFFFFF',
-        'selection': '#B3D7FF',
-        'success': '#0F7B0F',
-        'warning': '#9D5D00',
-        'danger': '#C50F1F',
+        'selection': '#C8E6FF',
+        'success': '#27AE60',
+        'warning': '#F39C12',
+        'danger': '#E74C3C',
     }
 
     @classmethod
@@ -65,6 +65,44 @@ class ModernStyle:
                 color: {colors['text']};
                 font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
                 font-size: 10pt;
+            }}
+
+            /* 標籤 (Labels) - 確保文字可見 */
+            QLabel {{
+                color: {colors['text']};
+                background-color: transparent;
+            }}
+
+            /* 核取方塊 (Checkbox) */
+            QCheckBox {{
+                color: {colors['text']};
+                spacing: 8px;
+            }}
+
+            QCheckBox::indicator {{
+                width: 18px;
+                height: 18px;
+                border: 2px solid {colors['border']};
+                border-radius: 4px;
+                background-color: {colors['input_bg']};
+            }}
+
+            QCheckBox::indicator:checked {{
+                background-color: {colors['primary']};
+                border-color: {colors['primary']};
+            }}
+
+            /* 數值輸入框 (SpinBox) */
+            QSpinBox, QDoubleSpinBox {{
+                background-color: {colors['input_bg']};
+                color: {colors['text']};
+                border: 1px solid {colors['border']};
+                border-radius: 6px;
+                padding: 4px 8px;
+            }}
+
+            QSpinBox:focus, QDoubleSpinBox:focus {{
+                border: 1px solid {colors['primary']};
             }}
 
             /* 分頁 (Tabs) - Modern Pill Style */

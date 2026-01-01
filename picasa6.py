@@ -12,7 +12,8 @@ import os
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QListWidget, QComboBox, QFileDialog,
-    QMessageBox, QTabWidget, QProgressBar, QGroupBox, QAction, QInputDialog
+    QMessageBox, QTabWidget, QProgressBar, QGroupBox, QAction, QInputDialog,
+    QGridLayout, QSpinBox, QDoubleSpinBox, QCheckBox
 )
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -608,6 +609,159 @@ class MarkdownConversionWorker(QThread):
         self.is_cancelled = True
 
 
+class BatchRenameWorker(QThread):
+    """批次重新命名工作執行緒"""
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, files, rules):
+        super().__init__()
+        self.files = files
+        self.rules = rules  # 字典包含: prefix, suffix, replace_old, replace_new, start_num, num_digits
+        self.is_cancelled = False
+
+    def run(self):
+        try:
+            total = len(self.files)
+            success_count = 0
+            
+            # 排序檔案以確保編號順序
+            sorted_files = natsorted(self.files)
+
+            prefix = self.rules.get('prefix', '')
+            suffix = self.rules.get('suffix', '')
+            replace_old = self.rules.get('replace_old', '')
+            replace_new = self.rules.get('replace_new', '')
+            start_num = self.rules.get('start_num', 1)
+            num_digits = self.rules.get('num_digits', 3)
+            use_num = self.rules.get('use_num', False)
+            ext_mode = self.rules.get('ext_mode', 'keep') # keep, lower, upper
+
+            for i, file_path in enumerate(sorted_files):
+                if self.is_cancelled:
+                    self.finished.emit(False, "操作已取消")
+                    return
+
+                dirname = os.path.dirname(file_path)
+                filename = os.path.basename(file_path)
+                name, ext = os.path.splitext(filename)
+
+                # 1. 替換文字
+                if replace_old:
+                    name = name.replace(replace_old, replace_new)
+
+                # 2. 添加前綴後綴
+                new_name = f"{prefix}{name}{suffix}"
+
+                # 3. 編號
+                if use_num:
+                    num_str = str(start_num + i).zfill(num_digits)
+                    new_name = f"{new_name}_{num_str}"
+                
+                # 4. 副檔名處理
+                if ext_mode == 'lower':
+                    ext = ext.lower()
+                elif ext_mode == 'upper':
+                    ext = ext.upper()
+
+                final_name = f"{new_name}{ext}"
+                new_path = os.path.join(dirname, final_name)
+
+                # 檢查檔名衝突
+                if os.path.exists(new_path) and new_path != file_path:
+                    # 自動重新命名避免覆蓋
+                    base, ex = os.path.splitext(final_name)
+                    final_name = f"{base}_new{ex}"
+                    new_path = os.path.join(dirname, final_name)
+
+                try:
+                    os.rename(file_path, new_path)
+                    success_count += 1
+                except Exception as e:
+                    print(f"Rename failed: {file_path} -> {new_path}: {e}")
+
+                progress = int((i + 1) / total * 100)
+                self.progress.emit(progress)
+                self.status.emit(f"已重新命名 {i+1}/{total}: {final_name}")
+
+            self.finished.emit(True, f"成功重新命名 {success_count}/{total} 個檔案")
+
+        except Exception as e:
+            self.finished.emit(False, f"重新命名失敗：{str(e)}")
+
+    def cancel(self):
+        self.is_cancelled = True
+
+
+class ImageEditWorker(QThread):
+    """圖片編輯工作執行緒"""
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, files, operations, output_folder=None):
+        super().__init__()
+        self.files = files
+        self.operations = operations # list of dict: {'type': 'rotate', 'value': 90}, {'type': 'flip', 'mode': 'horizontal'}
+        self.output_folder = output_folder
+        self.is_cancelled = False
+
+    def run(self):
+        try:
+            total = len(self.files)
+            success_count = 0
+
+            if self.output_folder and not os.path.exists(self.output_folder):
+                os.makedirs(self.output_folder)
+
+            for i, file_path in enumerate(self.files):
+                if self.is_cancelled:
+                    self.finished.emit(False, "操作已取消")
+                    return
+
+                self.status.emit(f"處理圖片 {i+1}/{total}...")
+                
+                try:
+                    img = Image.open(file_path)
+                    
+                    # 應用操作
+                    for op in self.operations:
+                        if op['type'] == 'rotate':
+                            # Expand=True 以確保旋轉後圖片不被裁切
+                            img = img.rotate(-op['value'], expand=True) 
+                        elif op['type'] == 'flip':
+                            if op['mode'] == 'horizontal':
+                                img = img.transpose(Image.FLIP_LEFT_RIGHT)
+                            elif op['mode'] == 'vertical':
+                                img = img.transpose(Image.FLIP_TOP_BOTTOM)
+                    
+                    # 儲存
+                    filename = os.path.basename(file_path)
+                    if self.output_folder:
+                        save_path = os.path.join(self.output_folder, filename)
+                    else:
+                        # 覆蓋原檔或另存新檔
+                        base, ext = os.path.splitext(file_path)
+                        save_path = f"{base}_edited{ext}"
+
+                    img.save(save_path)
+                    success_count += 1
+                    
+                except Exception as e:
+                    print(f"Edit failed {file_path}: {e}")
+
+                self.progress.emit(int((i + 1) / total * 100))
+
+            self.finished.emit(True, f"成功編輯 {success_count}/{total} 張圖片")
+
+        except Exception as e:
+            self.finished.emit(False, f"編輯失敗：{str(e)}")
+
+    def cancel(self):
+        self.is_cancelled = True
+
+
 class MediaToolkit(QMainWindow):
     """多媒體與文檔處理工具套件"""
 
@@ -640,6 +794,8 @@ class MediaToolkit(QMainWindow):
         self.compress_worker = None
         self.md_worker = None
         self.pdf_tool_worker = None
+        self.batch_rename_worker = None
+        self.image_edit_worker = None
         
         # 任務管理器
         self.task_manager = TaskManager()
@@ -706,6 +862,7 @@ class MediaToolkit(QMainWindow):
         self._create_convert_tab()
         self._create_video_to_gif_tab()
         self._create_image_compression_tab()
+        self._create_image_editor_tab()
         media_layout.addWidget(self.media_tabs)
         
         # 文件轉換類別
@@ -723,9 +880,29 @@ class MediaToolkit(QMainWindow):
         
         self.category_tabs.addTab(media_widget, "🎨 圖片影像處理")
         self.category_tabs.addTab(doc_widget, "📄 文件轉換工具")
+        
+        # 實用工具分頁
+        utils_widget = QWidget()
+        utils_layout = QVBoxLayout(utils_widget)
+        utils_layout.setContentsMargins(0, 10, 0, 0)
+        self.utils_tabs = QTabWidget()
+        self.utils_tabs.setDocumentMode(True)
+        self._create_batch_rename_tab()
+        utils_layout.addWidget(self.utils_tabs)
+        
+        self.category_tabs.addTab(utils_widget, "🛠️ 實用工具")
+
         main_layout.addWidget(self.category_tabs)
         
         self.statusBar().showMessage('🎉 MediaToolkit 已就緒！  |  © 2025 Dof Liu AI工作室')
+        
+        # 檢查是否有最近開啟的檔案
+        QTimer.singleShot(1000, self._check_recent_files_on_startup)
+
+    def _check_recent_files_on_startup(self):
+        """啟動時檢查並提示最近的檔案"""
+        # 可以選擇是否實作此功能，這裡先保留接口
+        pass
 
     def _create_image_tab(self):
         """圖片處理分頁"""
@@ -1763,16 +1940,13 @@ class MediaToolkit(QMainWindow):
         group.setStyleSheet(ModernStyle.get_card_style(self.current_theme))
         return group
 
-    def _create_menus(self):
-        """創建選單"""
-        file_menu = self.menuBar().addMenu("📁 檔案")
-        about_action = QAction("ℹ️ 關於", self)
-        about_action.triggered.connect(self.show_about)
-        file_menu.addAction(about_action)
-        
-        exit_action = QAction("🚪 退出", self)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+    def _remember_folder(self, config_key, file_path):
+        """記住最後使用的資料夾並加入最近使用記錄"""
+        if not file_path:
+            return
+        folder = os.path.dirname(file_path)
+        self.config.set(config_key, folder)
+        self.config.add_recent_file(file_path)
 
     def _toggle_theme(self):
         """切換主題"""
@@ -2859,41 +3033,396 @@ class MediaToolkit(QMainWindow):
     def _create_menus(self):
         """建立選單列"""
         menubar = self.menuBar()
-        menubar.clear() # Clear existing if any
+        menubar.clear()
         
         # 檔案選單
-        file_menu = menubar.addMenu('📁 檔案')
+        file_menu = menubar.addMenu("檔案 (&F)")
         
-        # 開啟
-        open_action = QAction('開啟圖片...', self)
-        open_action.setShortcut('Ctrl+O')
-        open_action.triggered.connect(lambda: self.category_tabs.setCurrentIndex(0))
-        file_menu.addAction(open_action)
-
-        # 最近使用的檔案
-        self.recent_menu = file_menu.addMenu('🕒 最近使用')
-        self._update_recent_menu()
+        # 最近使用記錄
+        self.recent_menu = file_menu.addMenu("最近開啟的檔案")
+        self.recent_menu.aboutToShow.connect(self._update_recent_menu)
         
         file_menu.addSeparator()
         
-        exit_action = QAction('離開', self)
-        exit_action.setShortcut('Ctrl+Q')
+        save_config_action = QAction("保存設定", self)
+        save_config_action.triggered.connect(self.config.save_config)
+        file_menu.addAction(save_config_action)
+        
+        exit_action = QAction("退出", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
         
         # 檢視選單
-        view_menu = menubar.addMenu('👁️ 檢視')
+        view_menu = menubar.addMenu("檢視 (&V)")
         
-        task_action = QAction('📋 任務管理', self)
-        task_action.setShortcut('Ctrl+T')
-        task_action.triggered.connect(self._show_task_manager)
-        view_menu.addAction(task_action)
+        # 主題切換
+        theme_menu = view_menu.addMenu("主題風格")
+        
+        light_theme_action = QAction("淺色主題", self)
+        light_theme_action.triggered.connect(lambda: self._apply_theme("light"))
+        theme_menu.addAction(light_theme_action)
+        
+        dark_theme_action = QAction("深色主題", self)
+        dark_theme_action.triggered.connect(lambda: self._apply_theme("dark"))
+        theme_menu.addAction(dark_theme_action)
         
         # 說明選單
-        help_menu = menubar.addMenu('❓ 說明')
-        about_action = QAction('關於 MediaToolkit', self)
+        help_menu = menubar.addMenu("說明 (&H)")
+        
+        about_action = QAction("關於 MediaToolkit", self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
+
+    def _update_recent_menu(self):
+        """更新最近使用檔案清單"""
+        self.recent_menu.clear()
+        recent_files = self.config.get_recent_files()
+        
+        if not recent_files:
+            no_action = QAction("無最近記錄", self)
+            no_action.setEnabled(False)
+            self.recent_menu.addAction(no_action)
+            return
+            
+        for item in recent_files:
+            path = item.get('path')
+            if not path or not os.path.exists(path):
+                continue
+                
+            name = item.get('name', os.path.basename(path))
+            action = QAction(f"{name}", self)
+            action.setData(path)
+            action.triggered.connect(lambda checked, p=path: self._open_recent_file(p))
+            self.recent_menu.addAction(action)
+            
+        self.recent_menu.addSeparator()
+        clear_action = QAction("清除記錄", self)
+        clear_action.triggered.connect(self.config.clear_recent)
+        self.recent_menu.addAction(clear_action)
+
+    def _open_recent_file(self, path):
+        """開啟最近的檔案"""
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "錯誤", "檔案不存在")
+            return
+            
+        # 簡單判斷檔案類型並跳轉到對應頁面
+        ext = os.path.splitext(path)[1].lower()
+        if ext in ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp']:
+            self._add_files_to_image_processor([path])
+        elif ext in ['.mp4', '.avi', '.mov', '.mkv']:
+            self._add_files_to_video_processor([path])
+        elif ext == '.pdf':
+            # 自動跳轉到 PDF 工具
+            self.category_tabs.setCurrentIndex(1) # PDF 頁面
+            # 這裡可以進一步優化自動載入...
+
+    def _add_files_to_image_processor(self, files):
+        """將檔案加入圖片處理器（輔助方法）"""
+        self.category_tabs.setCurrentIndex(0) # 圖片頁面
+        self.media_tabs.setCurrentIndex(0) # 圖片處理分頁
+        self.image_preview.add_files(files)
+
+    def _add_files_to_video_processor(self, files):
+        """將檔案加入影片處理器（輔助方法）"""
+        self.category_tabs.setCurrentIndex(0)
+        self.media_tabs.setCurrentIndex(1)
+        # 注意：這裡需要 VideoMerge 頁面向外暴露添加檔案的方法
+        # 暫時先把功能做進 _create_video_tab 的區域變數 refactor
+
+    # === 新增功能 UI 實作 ===
+
+    def _create_batch_rename_tab(self):
+        """建立批次重新命名分頁"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        
+        # 檔案選擇
+        group = self._create_group_box("📁 選擇檔案 - 支援拖放")
+        file_layout = QVBoxLayout()
+        
+        self.rename_list = DragDropListWidget()
+        self.rename_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.rename_list.files_dropped.connect(self._on_rename_files_dropped)
+        file_layout.addWidget(self.rename_list)
+        
+        btn_layout = QHBoxLayout()
+        btn_add = QPushButton("➕ 加入檔案")
+        btn_add.clicked.connect(self._browse_rename_files)
+        btn_clear = QPushButton("🗑️ 清空列表")
+        btn_clear.clicked.connect(self.rename_list.clear)
+        btn_clear.setProperty("secondary", True)
+        
+        btn_layout.addWidget(btn_add)
+        btn_layout.addWidget(btn_clear)
+        btn_layout.addStretch()
+        file_layout.addLayout(btn_layout)
+        
+        group.setLayout(file_layout)
+        layout.addWidget(group)
+        
+        # 命名規則設定
+        rules_group = self._create_group_box("⚙️ 命名規則")
+        rules_layout = QGridLayout()
+        
+        # 1. 替換文字
+        rules_layout.addWidget(QLabel("替換文字:"), 0, 0)
+        self.edit_replace_old = QLineEdit()
+        self.edit_replace_old.setPlaceholderText("原文字")
+        rules_layout.addWidget(self.edit_replace_old, 0, 1)
+        
+        rules_layout.addWidget(QLabel("→"), 0, 2)
+        self.edit_replace_new = QLineEdit()
+        self.edit_replace_new.setPlaceholderText("新文字")
+        rules_layout.addWidget(self.edit_replace_new, 0, 3)
+        
+        # 2. 前綴後綴
+        rules_layout.addWidget(QLabel("添加前綴:"), 1, 0)
+        self.edit_prefix = QLineEdit()
+        rules_layout.addWidget(self.edit_prefix, 1, 1)
+        
+        rules_layout.addWidget(QLabel("添加後綴:"), 1, 2)
+        self.edit_suffix = QLineEdit()
+        rules_layout.addWidget(self.edit_suffix, 1, 3)
+        
+        # 3. 自動編號
+        self.chk_numbering = QGroupBox("🔢 自動編號")
+        self.chk_numbering.setCheckable(True)
+        self.chk_numbering.setChecked(False)
+        num_layout = QHBoxLayout()
+        
+        num_layout.addWidget(QLabel("起始數字:"))
+        self.spin_start_num = QSpinBox()
+        self.spin_start_num.setRange(0, 999999)
+        self.spin_start_num.setValue(1)
+        num_layout.addWidget(self.spin_start_num)
+        
+        num_layout.addWidget(QLabel("位數:"))
+        self.spin_num_digits = QSpinBox()
+        self.spin_num_digits.setRange(1, 10)
+        self.spin_num_digits.setValue(3)
+        num_layout.addWidget(self.spin_num_digits)
+        
+        self.chk_numbering.setLayout(num_layout)
+        rules_layout.addWidget(self.chk_numbering, 2, 0, 1, 4)
+        
+        rules_group.setLayout(rules_layout)
+        layout.addWidget(rules_group)
+        
+        # 操作按鈕
+        action_layout = QHBoxLayout()
+        btn_preview = QPushButton("👁️ 預覽結果")
+        btn_preview.clicked.connect(self._preview_rename)
+        btn_preview.setProperty("secondary", True)
+        
+        self.btn_start_rename = QPushButton("🚀 開始重新命名")
+        self.btn_start_rename.clicked.connect(self._start_batch_rename)
+        self.btn_start_rename.setMinimumHeight(45)
+        
+        action_layout.addWidget(btn_preview)
+        action_layout.addWidget(self.btn_start_rename)
+        layout.addLayout(action_layout)
+        
+        self.utils_tabs.addTab(tab, "📝 批次重新命名")
+
+    def _create_image_editor_tab(self):
+        """建立圖片編輯分頁"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        
+        # 檔案選擇區域
+        group = self._create_group_box("🖼️ 圖片編輯")
+        content_layout = QVBoxLayout()
+        
+        # 工具列
+        toolbar = QHBoxLayout()
+        
+        btn_rotate_left = QPushButton("↺ 向左旋轉")
+        btn_rotate_left.clicked.connect(lambda: self._add_edit_operation('rotate', 90))
+        
+        btn_rotate_right = QPushButton("↻ 向右旋轉")
+        btn_rotate_right.clicked.connect(lambda: self._add_edit_operation('rotate', -90))
+        
+        btn_flip_h = QPushButton("↔ 水平翻轉")
+        btn_flip_h.clicked.connect(lambda: self._add_edit_operation('flip', 'horizontal'))
+        
+        btn_flip_v = QPushButton("↕ 垂直翻轉")
+        btn_flip_v.clicked.connect(lambda: self._add_edit_operation('flip', 'vertical'))
+        
+        toolbar.addWidget(btn_rotate_left)
+        toolbar.addWidget(btn_rotate_right)
+        toolbar.addWidget(btn_flip_h)
+        toolbar.addWidget(btn_flip_v)
+        toolbar.addStretch()
+        
+        content_layout.addLayout(toolbar)
+        
+        # 圖片列表與預覽
+        self.edit_list = ImagePreviewGrid()
+        self.edit_list.file_clicked.connect(self._show_image_viewer)
+        content_layout.addWidget(self.edit_list)
+        
+        # 底部按鈕
+        bottom_layout = QHBoxLayout()
+        btn_add = QPushButton("📂 加入圖片")
+        btn_add.clicked.connect(self._browse_edit_files)
+        
+        self.btn_apply_edit = QPushButton("💾 應用並儲存")
+        self.btn_apply_edit.clicked.connect(self._start_image_edit)
+        self.btn_apply_edit.setMinimumHeight(40)
+        
+        bottom_layout.addWidget(btn_add)
+        bottom_layout.addWidget(self.btn_apply_edit)
+        content_layout.addLayout(bottom_layout)
+        
+        group.setLayout(content_layout)
+        layout.addWidget(group)
+        
+        self.media_tabs.addTab(tab, "✏️ 圖片編輯")
+
+    # === 事件處理與邏輯 ===
+    
+    def _on_rename_files_dropped(self, files):
+        """批次命名：檔案拖放處理"""
+        self.rename_list.add_files(files)
+        
+    def _browse_rename_files(self):
+        """批次命名：瀏覽檔案"""
+        files, _ = QFileDialog.getOpenFileNames(self, "選擇檔案", "", "All Files (*.*)")
+        if files:
+            self.rename_list.add_files(files)
+            self._remember_folder('image.last_folder', files[0])
+            
+    def _preview_rename(self):
+        """預覽重新命名結果"""
+        if self.rename_list.count() == 0:
+            return
+            
+        # 簡單預覽視窗
+        preview_text = "預覽前 10 個檔案的變更:\n\n"
+        
+        files = self.rename_list.get_all_files()
+        
+        # 模擬規則應用 (複製自 Worker 邏輯)
+        prefix = self.edit_prefix.text()
+        suffix = self.edit_suffix.text()
+        replace_old = self.edit_replace_old.text()
+        replace_new = self.edit_replace_new.text()
+        use_num = self.chk_numbering.isChecked()
+        start_num = self.spin_start_num.value()
+        num_digits = self.spin_num_digits.value()
+        
+        for i, file_path in enumerate(files[:10]):
+            filename = os.path.basename(file_path)
+            name, ext = os.path.splitext(filename)
+            
+            if replace_old:
+                name = name.replace(replace_old, replace_new)
+            
+            new_name = f"{prefix}{name}{suffix}"
+            
+            if use_num:
+                num_str = str(start_num + i).zfill(num_digits)
+                new_name = f"{new_name}_{num_str}"
+                
+            final_name = f"{new_name}{ext}"
+            preview_text += f"{filename}  →  {final_name}\n"
+            
+        if len(files) > 10:
+            preview_text += f"\n... 以及其他 {len(files)-10} 個檔案"
+            
+        QMessageBox.information(self, "預覽重新命名", preview_text)
+
+    def _start_batch_rename(self):
+        """開始批次重新命名"""
+        files = self.rename_list.get_all_files()
+        if not files:
+            QMessageBox.warning(self, "提示", "請先加入檔案！")
+            return
+            
+        rules = {
+            'prefix': self.edit_prefix.text(),
+            'suffix': self.edit_suffix.text(),
+            'replace_old': self.edit_replace_old.text(),
+            'replace_new': self.edit_replace_new.text(),
+            'use_num': self.chk_numbering.isChecked(),
+            'start_num': self.spin_start_num.value(),
+            'num_digits': self.spin_num_digits.value()
+        }
+        
+        self.btn_start_rename.setEnabled(False)
+        self.batch_rename_worker = BatchRenameWorker(files, rules)
+        self.batch_rename_worker.finished.connect(self._on_rename_finished)
+        self.batch_rename_worker.start()
+        
+    def _on_rename_finished(self, success, message):
+        self.btn_start_rename.setEnabled(True)
+        if success:
+            QMessageBox.information(self, "完成", message)
+            self.rename_list.clear() # 成功後清空列表
+        else:
+            QMessageBox.warning(self, "錯誤", message)
+
+    # 圖片編輯邏輯
+    def _browse_edit_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", "", "Images (*.png *.jpg *.jpeg *.bmp *.gif)")
+        if files:
+            self.edit_list.add_files(files)
+            self._remember_folder('image.last_folder', files[0])
+
+    def _add_edit_operation(self, op_type, value):
+        """暫存編輯操作（目前簡化為直接應用到列表中的所有圖片）"""
+        # 注意：這個版本的實作是「點擊即處理」還是「累積操作後處理」？
+        # 為了簡化 UI，我們這裡採用：用戶點擊按鈕 -> 加入待執行操作列表 -> 點擊儲存 -> 執行
+        # 但 UI 上需要顯示待執行的操作，這裡先簡化為：點擊儲存時，彈出對話框詢問要執行什麼操作
+        
+        # 修正：更好的方式是維護一個 operations 列表
+        if not hasattr(self, '_pending_edits'):
+            self._pending_edits = []
+            
+        op_desc = ""
+        if op_type == 'rotate':
+            op_desc = f"旋轉 {value}°"
+        else:
+            op_desc = f"{value} 翻轉"
+            
+        # 簡單提示已加入操作
+        # 簡單提示已加入操作
+        self.statusBar().showMessage(f"已加入操作: {op_desc} (點擊儲存以應用)")
+        self._pending_edits.append({'type': op_type, 'value': value if op_type == 'rotate' else 0, 'mode': value if op_type == 'flip' else ''})
+        
+        # 即時預覽變更
+        self.edit_list.apply_transformation(op_type, value)
+
+    def _start_image_edit(self):
+        files = self.edit_list.get_files()
+        if not files:
+            QMessageBox.warning(self, "提示", "請先加入圖片！")
+            return
+            
+        if not hasattr(self, '_pending_edits') or not self._pending_edits:
+            QMessageBox.information(self, "提示", "請先點擊上方工具列按鈕選擇要進行的編輯操作")
+            return
+            
+        # 確認
+        reply = QMessageBox.question(self, "確認編輯", f"將對 {len(files)} 張圖片執行 {len(self._pending_edits)} 個操作，確定嗎？\n(將會覆蓋原始檔案或另存新檔)",
+                                   QMessageBox.Yes | QMessageBox.No)
+        
+        if reply == QMessageBox.Yes:
+            self.btn_apply_edit.setEnabled(False)
+            self.image_edit_worker = ImageEditWorker(files, self._pending_edits)
+            self.image_edit_worker.finished.connect(self._on_image_edit_finished)
+            self.image_edit_worker.progress.connect(lambda v: self.statusBar().showMessage(f"處理中... {v}%"))
+            self.image_edit_worker.start()
+
+    def _on_image_edit_finished(self, success, message):
+        self.btn_apply_edit.setEnabled(True)
+        self.statusBar().showMessage(message)
+        if success:
+            QMessageBox.information(self, "完成", message)
+            self._pending_edits = [] # 清空操作
+        else:
+            QMessageBox.warning(self, "錯誤", message)
 
     def _apply_theme(self, theme=None):
         """應用主題 (強制淺色模式)"""

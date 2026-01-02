@@ -64,7 +64,8 @@ def check_dependencies():
         'pypdf': HAS_PYPDF,
         'docx2pdf': HAS_DOCX2PDF,
         'pdf2docx': HAS_PDF2DOCX,
-        'reportlab': HAS_REPORTLAB
+        'reportlab': HAS_REPORTLAB,
+        'Pillow': HAS_PIL
     }
 
 
@@ -841,4 +842,37 @@ def add_image_watermark_to_pdf(input_path, output_path, watermark_image_path,
         logger.error(f"添加 PDF 圖片浮水印失敗: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
+        return False
+    
+def extract_page(pdf_path, page_number, output_path):
+    """
+    從 PDF 提取指定頁面
+
+    Args:
+        pdf_path: 來源 PDF 路徑
+        page_number: 頁碼 (1-based)
+        output_path: 輸出 PDF 路徑
+
+    Returns:
+        bool: 是否成功
+    """
+    try:
+        reader = pypdf.PdfReader(pdf_path)
+        total_pages = len(reader.pages)
+        
+        if page_number < 1 or page_number > total_pages:
+            logger.error(f"頁碼超出範圍: {page_number} (總頁數: {total_pages})")
+            return False
+
+        writer = pypdf.PdfWriter()
+        writer.add_page(reader.pages[page_number - 1])
+
+        with open(output_path, 'wb') as f:
+            writer.write(f)
+            
+        logger.info(f"已提取第 {page_number} 頁至: {output_path}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"提取頁面失敗: {str(e)}")
         return False

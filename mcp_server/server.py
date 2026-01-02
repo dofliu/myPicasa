@@ -29,14 +29,16 @@ from utils import (
     convert_word_to_pdf,
     convert_pdf_to_word,
     merge_pdfs,
-    resize_image
+    resize_image,
+    extract_page
 )
 from utils.doc_converter import check_dependencies
 from PIL import Image
 
 # 檔案大小限制（位元組）
-MAX_PDF_SIZE = 10 * 1024 * 1024  # 10MB
-MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
+# 檔案大小限制（位元組）
+MAX_PDF_SIZE = 50 * 1024 * 1024  # 50MB
+MAX_IMAGE_SIZE = 50 * 1024 * 1024  # 50MB
 MAX_PDFS_COUNT = 10  # 最多合併 10 個 PDF
 MAX_IMAGES_COUNT = 20  # 最多處理 20 張圖片
 MAX_COMPRESS_COUNT = 50 # 最多壓縮 50 張圖片
@@ -433,6 +435,29 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="extract_pdf_page",
+            description="從 PDF 提取指定頁面。目前僅支援輸出為單頁 PDF。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pdf_path": {
+                        "type": "string",
+                        "description": "來源 PDF 檔案路徑"
+                    },
+                    "page_number": {
+                        "type": "integer",
+                        "description": "要提取的頁碼 (從 1 開始)"
+                    },
+                    "output_format": {
+                        "type": "string",
+                        "description": "輸出格式 (目前僅支援 'pdf', 未來可能支援 'image')",
+                        "default": "pdf"
+                    }
+                },
+                "required": ["pdf_path", "page_number"]
+            }
+        ),
+        Tool(
             name="check_system",
             description="檢查系統環境和依賴項狀態，診斷轉換功能是否可用。建議在轉換失敗時呼叫此工具。",
             inputSchema={
@@ -466,7 +491,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
 
         elif name == "check_system":
             return await handle_check_system(arguments)
-
         elif name == "compress_images":
             return await handle_compress_images(arguments)
 
@@ -475,6 +499,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
 
         elif name == "batch_edit_images":
             return await handle_batch_edit_images(arguments)
+
+        elif name == "extract_pdf_page":
+            return await handle_extract_pdf_page(arguments)
+
+        elif name == "check_system":
+            return await handle_check_system(arguments)
 
         else:
             raise ValueError(f"未知工具: {name}")
@@ -978,8 +1008,21 @@ async def handle_create_gif(arguments: dict) -> list[TextContent | ImageContent]
         min_h = min(img.height for img in images)
         frames = [resize_image(img, (min_w, min_h), "直接縮放") for img in images]
 
+        # 決定輸出路徑
+        local_inputs = [p for p, t in working_paths if not t]
+        if local_inputs:
+            base_dir = os.path.dirname(local_inputs[0])
+            output_path = os.path.join(base_dir, "created.gif")
+            counter = 1
+            while os.path.exists(output_path):
+                output_path = os.path.join(base_dir, f"created_{counter}.gif")
+                counter += 1
+            output_is_temp = False
+        else:
+            output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".gif").name
+            output_is_temp = True
+
         # 保存 GIF
-        output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".gif").name
         frames[0].save(
             output_path,
             save_all=True,
@@ -989,22 +1032,40 @@ async def handle_create_gif(arguments: dict) -> list[TextContent | ImageContent]
             optimize=True
         )
 
-        # 讀取並轉換為 base64
-        gif_base64 = file_to_base64(output_path)
+        content = []
+        msg = f"成功創建 GIF！共 {total_count} 幀"
+        
+        if not output_is_temp:
+            msg += f"\n檔案已儲存至: {output_path}"
+            msg += "\n(為了效能，以下僅顯示第一幀預覽)"
+
+            # 生成第一幀縮圖
+            thumbnail = frames[0].copy()
+            thumbnail.thumbnail((512, 512))
+            
+            import io
+            thumb_buf = io.BytesIO()
+            thumbnail.save(thumb_buf, format="PNG")
+            img_base64 = base64.b64encode(thumb_buf.getvalue()).decode('utf-8')
+        else:
+            # 臨時檔案
+            img_base64 = file_to_base64(output_path)
+
+        content.append(TextContent(type="text", text=msg))
+        content.append(ImageContent(
+            type="image",
+            data=img_base64,
+            mimeType="image/png" if not output_is_temp else "image/gif"
+        ))
 
         # 清理
         for p, t in working_paths:
             if t: os.unlink(p)
-        os.unlink(output_path)
+            
+        if output_is_temp:
+            os.unlink(output_path)
 
-        return [
-            TextContent(type="text", text=f"成功創建 GIF！共 {total_count} 幀"),
-            ImageContent(
-                type="image",
-                data=gif_base64,
-                mimeType="image/gif"
-            )
-        ]
+        return content
 
     except Exception as e:
         for p, t in working_paths:
@@ -1293,6 +1354,47 @@ async def handle_check_system(arguments: dict) -> list[TextContent]:
     """處理系統檢查"""
     info = get_diagnostic_info()
     return [TextContent(type="text", text=info)]
+
+
+async def handle_extract_pdf_page(arguments: dict) -> list[TextContent | EmbeddedResource]:
+    """處理 PDF 頁面提取"""
+    pdf_path_arg = arguments.get("pdf_path")
+    page_number = arguments.get("page_number")
+    output_format = arguments.get("output_format", "pdf")
+
+    if not pdf_path_arg:
+        return [TextContent(type="text", text="需要提供 pdf_path")]
+    
+    clean_path = pdf_path_arg.strip('"').strip("'")
+    if not os.path.exists(clean_path):
+         return [TextContent(type="text", text=f"檔案不存在: {clean_path}")]
+
+    # 決定輸出路徑
+    base_dir = os.path.dirname(clean_path)
+    base_name = os.path.splitext(os.path.basename(clean_path))[0]
+    output_filename = f"{base_name}_page_{page_number}.pdf"
+    output_path = os.path.join(base_dir, output_filename)
+    
+    # 避免覆蓋
+    counter = 1
+    while os.path.exists(output_path):
+        output_filename = f"{base_name}_page_{page_number}_{counter}.pdf"
+        output_path = os.path.join(base_dir, output_filename)
+        counter += 1
+
+    try:
+        if output_format.lower() != 'pdf':
+             return [TextContent(type="text", text="目前僅支援 PDF 輸出格式")]
+
+        success = extract_page(clean_path, page_number, output_path)
+
+        if success:
+             return [TextContent(type="text", text=f"成功提取第 {page_number} 頁！\n檔案已儲存至: {output_path}")]
+        else:
+             return [TextContent(type="text", text=f"提取失敗，請檢查頁碼是否正確。")]
+
+    except Exception as e:
+        return [TextContent(type="text", text=f"提取發生錯誤: {str(e)}")]
 
 async def main():
     # Configure logging to write to stderr

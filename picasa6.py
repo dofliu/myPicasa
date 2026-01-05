@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QListWidget, QComboBox, QFileDialog,
     QMessageBox, QTabWidget, QProgressBar, QGroupBox, QAction, QInputDialog,
-    QGridLayout, QSpinBox, QDoubleSpinBox, QCheckBox
+    QGridLayout, QSpinBox, QDoubleSpinBox, QCheckBox, QSlider
 )
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -604,6 +604,65 @@ class MarkdownConversionWorker(QThread):
             
         except Exception as e:
             self.finished.emit(False, f"轉換失敗：{str(e)}")
+
+    def cancel(self):
+        self.is_cancelled = True
+
+
+class MarkdownToolsWorker(QThread):
+    """
+    通用 Markdown 轉換工作執行緒
+    支援：md_to_pdf, md_to_docx, docx_to_md, pdf_to_md
+    """
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, mode: str, input_file: str, output_file: str):
+        super().__init__()
+        self.mode = mode
+        self.input_file = input_file
+        self.output_file = output_file
+        self.is_cancelled = False
+
+    def run(self):
+        try:
+            from utils.md_converter import MarkdownConverter
+            
+            def callback(p, s):
+                if self.is_cancelled:
+                    raise Exception("已取消")
+                self.progress.emit(p)
+                self.status.emit(s)
+            
+            if self.mode == 'md_to_pdf':
+                callback(5, "準備轉換 Markdown → PDF...")
+                MarkdownConverter.md_to_pdf(self.input_file, self.output_file, callback)
+                
+            elif self.mode == 'md_to_docx':
+                callback(5, "準備轉換 Markdown → Word...")
+                MarkdownConverter.md_to_docx(self.input_file, self.output_file, callback)
+                
+            elif self.mode == 'docx_to_md':
+                callback(5, "準備轉換 Word → Markdown...")
+                MarkdownConverter.docx_to_md(self.input_file, self.output_file, callback)
+                
+            elif self.mode == 'pdf_to_md':
+                callback(5, "準備轉換 PDF → Markdown...")
+                MarkdownConverter.pdf_to_md(self.input_file, self.output_file, callback)
+            
+            else:
+                self.finished.emit(False, f"未知的轉換模式：{self.mode}")
+                return
+            
+            self.progress.emit(100)
+            self.finished.emit(True, f"轉換成功！\n已儲存至：{self.output_file}")
+            
+        except Exception as e:
+            if "已取消" in str(e):
+                self.finished.emit(False, "操作已取消")
+            else:
+                self.finished.emit(False, f"轉換失敗：{str(e)}")
 
     def cancel(self):
         self.is_cancelled = True
@@ -1568,14 +1627,16 @@ class MediaToolkit(QMainWindow):
         self.doc_tabs.addTab(tab, "🔄 格式轉換")
 
     def _create_markdown_tab(self):
-        """Markdown 轉 Word 分頁"""
+        """Markdown 工具分頁 - 支援多種轉換"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setSpacing(15)
         
-        # 檔案選擇
-        file_group = self._create_group_box("📝 選擇 Markdown 文件")
-        file_layout = QVBoxLayout()
+        # === 區塊 1: Markdown 輸出轉換 ===
+        md_out_group = self._create_group_box("📝 Markdown → 其他格式")
+        md_out_layout = QVBoxLayout()
         
+        # 輸入檔案
         input_layout = QHBoxLayout()
         input_layout.addWidget(QLabel("Markdown 文件:"))
         self.md_input = QLineEdit()
@@ -1586,25 +1647,88 @@ class MediaToolkit(QMainWindow):
         btn_browse.setProperty("secondary", True)
         btn_browse.clicked.connect(self._browse_markdown)
         input_layout.addWidget(btn_browse)
-        file_layout.addLayout(input_layout)
+        md_out_layout.addLayout(input_layout)
         
-        file_group.setLayout(file_layout)
-        layout.addWidget(file_group)
-
-        # 輸出設定
-        out_group = self._create_group_box("💾 輸出設定")
+        # 輸出格式選擇
+        format_layout = QHBoxLayout()
+        format_layout.addWidget(QLabel("輸出格式:"))
+        
+        from PyQt5.QtWidgets import QButtonGroup, QRadioButton
+        
+        self.md_output_format_group = QButtonGroup(self)
+        
+        self.radio_md_to_docx = QRadioButton("Word (.docx)")
+        self.radio_md_to_docx.setChecked(True)
+        self.md_output_format_group.addButton(self.radio_md_to_docx, 0)
+        format_layout.addWidget(self.radio_md_to_docx)
+        
+        self.radio_md_to_pdf = QRadioButton("PDF (.pdf)")
+        self.md_output_format_group.addButton(self.radio_md_to_pdf, 1)
+        format_layout.addWidget(self.radio_md_to_pdf)
+        
+        format_layout.addStretch()
+        md_out_layout.addLayout(format_layout)
+        
+        # 輸出路徑
         out_layout = QHBoxLayout()
-        out_layout.addWidget(QLabel("輸出 Word 文件:"))
+        out_layout.addWidget(QLabel("輸出路徑:"))
         self.docx_output = QLineEdit()
-        self.docx_output.setPlaceholderText("轉換後的 .docx 文件路徑...")
+        self.docx_output.setPlaceholderText("轉換後的文件路徑...")
         out_layout.addWidget(self.docx_output)
         
         btn_out = QPushButton("📂 瀏覽")
         btn_out.setProperty("secondary", True)
-        btn_out.clicked.connect(self._browse_docx_output)
+        btn_out.clicked.connect(self._browse_md_output)
         out_layout.addWidget(btn_out)
-        out_group.setLayout(out_layout)
-        layout.addWidget(out_group)
+        md_out_layout.addLayout(out_layout)
+        
+        # 轉換按鈕
+        btn_convert_md = QPushButton("✨ 開始轉換")
+        btn_convert_md.clicked.connect(self._convert_md_to_other)
+        btn_convert_md.setMinimumHeight(40)
+        md_out_layout.addWidget(btn_convert_md)
+        
+        md_out_group.setLayout(md_out_layout)
+        layout.addWidget(md_out_group)
+        
+        # === 區塊 2: 反向轉換 (DOCX/PDF → Markdown) ===
+        reverse_group = self._create_group_box("🔄 其他格式 → Markdown")
+        reverse_layout = QVBoxLayout()
+        
+        # 輸入檔案
+        rev_input_layout = QHBoxLayout()
+        rev_input_layout.addWidget(QLabel("來源文件:"))
+        self.reverse_md_input = QLineEdit()
+        self.reverse_md_input.setPlaceholderText("選擇 .docx 或 .pdf 文件...")
+        rev_input_layout.addWidget(self.reverse_md_input)
+        
+        btn_rev_browse = QPushButton("📂 瀏覽")
+        btn_rev_browse.setProperty("secondary", True)
+        btn_rev_browse.clicked.connect(self._browse_reverse_input)
+        rev_input_layout.addWidget(btn_rev_browse)
+        reverse_layout.addLayout(rev_input_layout)
+        
+        # 輸出路徑
+        rev_out_layout = QHBoxLayout()
+        rev_out_layout.addWidget(QLabel("輸出 Markdown:"))
+        self.reverse_md_output = QLineEdit()
+        self.reverse_md_output.setPlaceholderText("轉換後的 .md 文件路徑...")
+        rev_out_layout.addWidget(self.reverse_md_output)
+        
+        btn_rev_out = QPushButton("📂 瀏覽")
+        btn_rev_out.setProperty("secondary", True)
+        btn_rev_out.clicked.connect(self._browse_reverse_output)
+        rev_out_layout.addWidget(btn_rev_out)
+        reverse_layout.addLayout(rev_out_layout)
+        
+        # 轉換按鈕
+        btn_reverse = QPushButton("🔄 轉換為 Markdown")
+        btn_reverse.clicked.connect(self._convert_to_markdown)
+        btn_reverse.setMinimumHeight(40)
+        reverse_layout.addWidget(btn_reverse)
+        
+        reverse_group.setLayout(reverse_layout)
+        layout.addWidget(reverse_group)
         
         # 進度顯示
         self.md_progress_widget = QWidget()
@@ -1622,14 +1746,9 @@ class MediaToolkit(QMainWindow):
         self.md_progress_widget.setVisible(False)
         layout.addWidget(self.md_progress_widget)
         
-        # 轉換按鈕
-        btn_convert = QPushButton("✨ 轉換為 Word")
-        btn_convert.clicked.connect(self._convert_md_to_docx)
-        btn_convert.setMinimumHeight(44)
-        layout.addWidget(btn_convert)
-        
         layout.addStretch()
-        self.doc_tabs.addTab(tab, "📝 Markdown 轉 Word")
+        self.doc_tabs.addTab(tab, "📝 Markdown 工具")
+
 
     def _browse_markdown(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1684,7 +1803,116 @@ class MediaToolkit(QMainWindow):
             self.md_status_label.setStyleSheet("color: #EF4444; font-size: 10pt;")
             self.md_progress_widget.setVisible(True)
 
+    def _browse_md_output(self):
+        """瀏覽 Markdown 輸出路徑"""
+        format_id = self.md_output_format_group.checkedId()
+        if format_id == 0:  # Word
+            file_filter = "Word 文件 (*.docx)"
+            default_ext = ".docx"
+        else:  # PDF
+            file_filter = "PDF 文件 (*.pdf)"
+            default_ext = ".pdf"
+        
+        # 根據輸入自動建議輸出路徑
+        current_path = self.docx_output.text()
+        if not current_path and self.md_input.text():
+            base_name = os.path.splitext(self.md_input.text())[0]
+            current_path = f"{base_name}{default_ext}"
+        
+        file_path, _ = QFileDialog.getSaveFileName(self, "儲存文件", current_path, file_filter)
+        if file_path:
+            self.docx_output.setText(file_path)
+
+    def _browse_reverse_input(self):
+        """瀏覽反向轉換的來源文件"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "選擇來源文件", "", "Word/PDF 文件 (*.docx *.pdf);;Word 文件 (*.docx);;PDF 文件 (*.pdf);;All Files (*)"
+        )
+        if file_path:
+            self.reverse_md_input.setText(file_path)
+            # 自動設定輸出路徑
+            base_name = os.path.splitext(file_path)[0]
+            self.reverse_md_output.setText(f"{base_name}.md")
+
+    def _browse_reverse_output(self):
+        """瀏覽反向轉換的輸出路徑"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "儲存 Markdown 文件", self.reverse_md_output.text(), "Markdown 文件 (*.md)"
+        )
+        if file_path:
+            self.reverse_md_output.setText(file_path)
+
+    def _convert_md_to_other(self):
+        """轉換 Markdown 到其他格式"""
+        md_file = self.md_input.text()
+        output_file = self.docx_output.text()
+        
+        if not md_file or not os.path.exists(md_file):
+            self.show_warning("請選擇有效的 Markdown 文件！")
+            return
+            
+        if not output_file:
+            self.show_warning("請設定輸出路徑！")
+            return
+        
+        # 判斷輸出格式
+        format_id = self.md_output_format_group.checkedId()
+        if format_id == 0:
+            mode = 'md_to_docx'
+        else:
+            mode = 'md_to_pdf'
+        
+        # 準備 UI
+        self.md_progress_widget.setVisible(True)
+        self.md_progress.setValue(0)
+        self.md_status_label.setText("準備中...")
+        self.md_status_label.setStyleSheet("color: #64748B; font-size: 10pt;")
+        
+        # 啟動工作執行緒
+        self.md_tools_worker = MarkdownToolsWorker(mode, md_file, output_file)
+        self.md_tools_worker.status.connect(self.md_status_label.setText)
+        self.md_tools_worker.progress.connect(self.md_progress.setValue)
+        self.md_tools_worker.finished.connect(self._on_md_conversion_finished)
+        self.md_tools_worker.start()
+
+    def _convert_to_markdown(self):
+        """轉換其他格式到 Markdown"""
+        input_file = self.reverse_md_input.text()
+        output_file = self.reverse_md_output.text()
+        
+        if not input_file or not os.path.exists(input_file):
+            self.show_warning("請選擇有效的來源文件！")
+            return
+            
+        if not output_file:
+            self.show_warning("請設定輸出路徑！")
+            return
+        
+        # 判斷輸入格式
+        ext = os.path.splitext(input_file)[1].lower()
+        if ext == '.docx':
+            mode = 'docx_to_md'
+        elif ext == '.pdf':
+            mode = 'pdf_to_md'
+        else:
+            self.show_warning(f"不支援的文件格式：{ext}")
+            return
+        
+        # 準備 UI
+        self.md_progress_widget.setVisible(True)
+        self.md_progress.setValue(0)
+        self.md_status_label.setText("準備中...")
+        self.md_status_label.setStyleSheet("color: #64748B; font-size: 10pt;")
+        
+        # 啟動工作執行緒
+        self.md_tools_worker = MarkdownToolsWorker(mode, input_file, output_file)
+        self.md_tools_worker.status.connect(self.md_status_label.setText)
+        self.md_tools_worker.progress.connect(self.md_progress.setValue)
+        self.md_tools_worker.finished.connect(self._on_md_conversion_finished)
+        self.md_tools_worker.start()
+
     def _create_pdf_merge_tab(self):
+
         """PDF 合併分頁"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -3602,6 +3830,76 @@ class MediaToolkit(QMainWindow):
         img_group.setLayout(img_layout)
         layout.addWidget(img_group)
         
+        # === 區塊 3: PDF 壓縮（瘦身）===
+        compress_group = self._create_group_box("📦 PDF 壓縮（瘦身）")
+        compress_layout = QVBoxLayout()
+        
+        # 檔案選擇
+        file_layout3 = QHBoxLayout()
+        self.pdf_compress_input = QLineEdit()
+        self.pdf_compress_input.setPlaceholderText("請選擇要壓縮的 PDF 文件...")
+        btn_browse3 = QPushButton("📂 瀏覽")
+        btn_browse3.clicked.connect(lambda: self._browse_pdf(self.pdf_compress_input, 'pdf_compress'))
+        file_layout3.addWidget(self.pdf_compress_input)
+        file_layout3.addWidget(btn_browse3)
+        compress_layout.addLayout(file_layout3)
+        
+        # 壓縮模式選擇
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("壓縮模式:"))
+        
+        from PyQt5.QtWidgets import QButtonGroup, QRadioButton
+        
+        self.compress_mode_group = QButtonGroup(self)
+        
+        self.radio_basic = QRadioButton("基礎壓縮")
+        self.radio_basic.setToolTip("壓縮內容串流 + 移除重複物件（無損）")
+        self.radio_basic.setChecked(True)
+        self.compress_mode_group.addButton(self.radio_basic, 0)
+        mode_layout.addWidget(self.radio_basic)
+        
+        self.radio_image = QRadioButton("圖片壓縮")
+        self.radio_image.setToolTip("降低 PDF 中圖片的品質")
+        self.compress_mode_group.addButton(self.radio_image, 1)
+        mode_layout.addWidget(self.radio_image)
+        
+        self.radio_deep = QRadioButton("深度壓縮")
+        self.radio_deep.setToolTip("將每頁轉為JPEG重新組裝（最大壓縮，可能損失品質）")
+        self.compress_mode_group.addButton(self.radio_deep, 2)
+        mode_layout.addWidget(self.radio_deep)
+        
+        mode_layout.addStretch()
+        compress_layout.addLayout(mode_layout)
+        
+        # 品質滑桿
+        quality_layout = QHBoxLayout()
+        quality_layout.addWidget(QLabel("品質 (僅圖片/深度壓縮):"))
+        
+        self.pdf_compress_quality = QSlider(Qt.Horizontal)
+        self.pdf_compress_quality.setRange(10, 100)
+        self.pdf_compress_quality.setValue(70)
+        self.pdf_compress_quality.setTickPosition(QSlider.TicksBelow)
+        self.pdf_compress_quality.setTickInterval(10)
+        quality_layout.addWidget(self.pdf_compress_quality)
+        
+        self.pdf_compress_quality_label = QLabel("70")
+        self.pdf_compress_quality_label.setMinimumWidth(30)
+        self.pdf_compress_quality.valueChanged.connect(
+            lambda v: self.pdf_compress_quality_label.setText(str(v))
+        )
+        quality_layout.addWidget(self.pdf_compress_quality_label)
+        
+        compress_layout.addLayout(quality_layout)
+        
+        # 壓縮按鈕
+        btn_compress = QPushButton("📦 開始壓縮")
+        btn_compress.clicked.connect(lambda: self._start_pdf_tool('compress'))
+        btn_compress.setMinimumHeight(40)
+        compress_layout.addWidget(btn_compress)
+        
+        compress_group.setLayout(compress_layout)
+        layout.addWidget(compress_group)
+        
         # 狀態標籤
         self.pdf_tool_status = QLabel("就緒")
         self.pdf_tool_status.setAlignment(Qt.AlignCenter)
@@ -3658,6 +3956,30 @@ class MediaToolkit(QMainWindow):
                 mode, input_path=input_path, output_dir=output_dir, format=fmt, dpi=dpi
             )
 
+        elif mode == 'compress':
+            input_path = self.pdf_compress_input.text()
+            if not input_path:
+                self.show_warning("請選擇要壓縮的 PDF 文件")
+                return
+            
+            # 取得壓縮模式
+            mode_id = self.compress_mode_group.checkedId()
+            compress_mode = ['basic', 'image', 'deep'][mode_id]
+            quality = self.pdf_compress_quality.value()
+            
+            # 輸出檔名
+            base_name = os.path.splitext(input_path)[0]
+            output_path = f"{base_name}_compressed.pdf"
+            
+            self.pdf_tool_worker = PDFToolsWorker(
+                mode, 
+                input_path=input_path, 
+                output_path=output_path,
+                compress_mode=compress_mode,
+                quality=quality,
+                dpi=150
+            )
+
         # 啟動 Worker
         self.pdf_tool_worker.status.connect(self.pdf_tool_status.setText)
         self.pdf_tool_worker.finished.connect(self._on_pdf_tool_finished)
@@ -3665,7 +3987,8 @@ class MediaToolkit(QMainWindow):
         task_name = {
             'split': 'PDF 拆分',
             'extract': 'PDF 擷取',
-            'to_image': 'PDF 轉圖片'
+            'to_image': 'PDF 轉圖片',
+            'compress': 'PDF 壓縮'
         }.get(mode, 'PDF 任務')
         
         self._add_task_tracking(self.pdf_tool_worker, task_name)

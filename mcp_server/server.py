@@ -458,6 +458,101 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="compress_pdf",
+            description="壓縮 PDF 文件以減少檔案大小。提供三種壓縮模式：基礎壓縮（無損）、圖片壓縮、深度壓縮（最大壓縮率）。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pdf_path": {
+                        "type": "string",
+                        "description": "要壓縮的 PDF 檔案路徑"
+                    },
+                    "pdf_data": {
+                        "type": "string",
+                        "description": "PDF 文件的 base64 編碼內容 (若有 pdf_path 則可省略)"
+                    },
+                    "compress_mode": {
+                        "type": "string",
+                        "description": "壓縮模式：'basic' (基礎壓縮，無損), 'image' (圖片壓縮), 'deep' (深度壓縮，最大壓縮率)",
+                        "default": "basic"
+                    },
+                    "quality": {
+                        "type": "integer",
+                        "description": "圖片品質 (10-100)，僅對 image 和 deep 模式有效",
+                        "default": 70
+                    }
+                }
+            }
+        ),
+        Tool(
+            name="md_to_pdf",
+            description="將 Markdown 轉換為 PDF。可傳入檔案路徑或直接傳入 Markdown 內容文字。需要系統已安裝 Pandoc。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "md_path": {
+                        "type": "string",
+                        "description": "Markdown 文件的路徑 (與 md_content 二選一)"
+                    },
+                    "md_content": {
+                        "type": "string",
+                        "description": "Markdown 內容文字 (與 md_path 二選一，適合 AI 直接傳入生成的內容)"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "輸出目錄路徑 (可選，預設為桌面)",
+                        "default": ""
+                    },
+                    "output_filename": {
+                        "type": "string",
+                        "description": "輸出檔名 (可選，預設為 output.pdf)",
+                        "default": "output.pdf"
+                    }
+                }
+            }
+        ),
+        Tool(
+            name="md_to_docx",
+            description="將 Markdown 轉換為 Word (.docx)。可傳入檔案路徑或直接傳入 Markdown 內容文字。需要系統已安裝 Pandoc。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "md_path": {
+                        "type": "string",
+                        "description": "Markdown 文件的路徑 (與 md_content 二選一)"
+                    },
+                    "md_content": {
+                        "type": "string",
+                        "description": "Markdown 內容文字 (與 md_path 二選一，適合 AI 直接傳入生成的內容)"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "輸出目錄路徑 (可選，預設為桌面)",
+                        "default": ""
+                    },
+                    "output_filename": {
+                        "type": "string",
+                        "description": "輸出檔名 (可選，預設為 output.docx)",
+                        "default": "output.docx"
+                    }
+                }
+            }
+        ),
+        Tool(
+            name="docx_to_md",
+            description="將 Word (.docx) 文件轉換為 Markdown。需要系統已安裝 Pandoc。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "docx_path": {
+                        "type": "string",
+                        "description": "Word 文件的路徑"
+                    }
+                },
+                "required": ["docx_path"]
+            }
+        ),
+        Tool(
             name="check_system",
             description="檢查系統環境和依賴項狀態，診斷轉換功能是否可用。建議在轉換失敗時呼叫此工具。",
             inputSchema={
@@ -502,6 +597,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
 
         elif name == "extract_pdf_page":
             return await handle_extract_pdf_page(arguments)
+
+        elif name == "compress_pdf":
+            return await handle_compress_pdf(arguments)
+
+        elif name == "md_to_pdf":
+            return await handle_md_to_pdf(arguments)
+
+        elif name == "md_to_docx":
+            return await handle_md_to_docx(arguments)
+
+        elif name == "docx_to_md":
+            return await handle_docx_to_md(arguments)
 
         elif name == "check_system":
             return await handle_check_system(arguments)
@@ -1137,31 +1244,63 @@ async def handle_compress_images(arguments: dict) -> list[TextContent]:
         
         # 真正的實作：
         processed_count = 0
+        content = []
+        details = []
         
         for p, t in working_paths:
             try:
-                # 簡單打開再儲存以壓縮
                 img = Image.open(p)
-                total_original_size += os.path.getsize(p)
-                
-                # 轉存到臨時檔
-                out_ext = f".{output_format}"
-                out_temp = tempfile.NamedTemporaryFile(delete=False, suffix=out_ext).name
+                orig_size = os.path.getsize(p)
+                total_original_size += orig_size
                 
                 # 轉換模式
-                if output_format in ['jpg', 'jpeg'] and img.mode in ('RGBA', 'P'):
+                if output_format.lower() in ['jpg', 'jpeg'] and img.mode in ('RGBA', 'P'):
                     img = img.convert('RGB')
                 
-                img.save(out_temp, quality=quality, optimize=True)
-                
-                new_size = os.path.getsize(out_temp)
-                total_compressed_size += new_size
-                
-                os.unlink(out_temp) # 這裡只是模擬壓縮並計算大小，實際應用可能需要Zip
-                processed_count += 1
+                # 決定輸出路徑
+                if not t:
+                    # 本地路徑：存到同目錄
+                    base, ext = os.path.splitext(p)
+                    # 如果使用者要求的格式跟原檔不同，換掉副檔名
+                    target_ext = f".{output_format}"
+                    out_path = f"{base}_compressed{target_ext}"
+                    
+                    # 避免重複
+                    counter = 1
+                    while os.path.exists(out_path):
+                        out_path = f"{base}_compressed_{counter}{target_ext}"
+                        counter += 1
+                        
+                    img.save(out_path, quality=quality, optimize=True)
+                    new_size = os.path.getsize(out_path)
+                    total_compressed_size += new_size
+                    processed_count += 1
+                    details.append(f"• {os.path.basename(p)} -> {os.path.basename(out_path)} ({new_size/1024:.1f} KB)")
+                else:
+                    # Base64 輸入：回傳 Base64
+                    import io
+                    buf = io.BytesIO()
+                    # PIL save 需要 format
+                    pil_format = 'JPEG' if output_format.lower() in ['jpg', 'jpeg'] else output_format.upper()
+                    img.save(buf, format=pil_format, quality=quality, optimize=True)
+                    compressed_data = base64.b64encode(buf.getvalue()).decode('utf-8')
+                    
+                    new_size = len(buf.getvalue())
+                    total_compressed_size += new_size
+                    processed_count += 1
+                    
+                    mime_type = f"image/{output_format.lower()}"
+                    if output_format.lower() == 'jpg': mime_type = "image/jpeg"
+                    
+                    content.append(ImageContent(
+                        type="image",
+                        data=compressed_data,
+                        mimeType=mime_type
+                    ))
+                    details.append(f"• [Base64 圖片] ({new_size/1024:.1f} KB)")
                 
             except Exception as e:
-                pass
+                details.append(f"• 處理失敗: {str(e)}")
         
         # 清理
         for p, t in working_paths:
@@ -1170,14 +1309,15 @@ async def handle_compress_images(arguments: dict) -> list[TextContent]:
         ratio = 0
         if total_original_size > 0:
             ratio = (1 - total_compressed_size / total_original_size) * 100
+        
+        msg = f"✅ 成功壓縮 {processed_count} 張圖片\n"
+        msg += f"原始總大小: {total_original_size/1024/1024:.2f} MB\n"
+        msg += f"壓縮後總大小: {total_compressed_size/1024/1024:.2f} MB\n"
+        msg += f"節省空間: {ratio:.1f}%\n\n"
+        msg += "\n".join(details)
             
-        return [TextContent(
-            type="text", 
-            text=f"✅ 成功壓縮 {processed_count} 張圖片\n"
-                 f"原始大小: {total_original_size/1024:.1f} KB\n"
-                 f"壓縮後: {total_compressed_size/1024:.1f} KB\n"
-                 f"節省空間: {ratio:.1f}%"
-        )]
+        content.insert(0, TextContent(type="text", text=msg))
+        return content
 
     except Exception as e:
         for p, t in working_paths:
@@ -1395,6 +1535,322 @@ async def handle_extract_pdf_page(arguments: dict) -> list[TextContent | Embedde
 
     except Exception as e:
         return [TextContent(type="text", text=f"提取發生錯誤: {str(e)}")]
+
+
+async def handle_compress_pdf(arguments: dict) -> list[TextContent | EmbeddedResource]:
+    """處理 PDF 壓縮"""
+    pdf_data = arguments.get("pdf_data")
+    pdf_path_arg = arguments.get("pdf_path")
+    compress_mode = arguments.get("compress_mode", "basic")
+    quality = arguments.get("quality", 70)
+    
+    current_pdf_path = None
+    output_path = None
+    is_temp = False
+    
+    try:
+        # 解析輸入
+        current_pdf_path, is_temp = resolve_file_input(pdf_data, pdf_path_arg, ".pdf")
+        
+        # 驗證檔案大小
+        validate_file_size(current_pdf_path, MAX_PDF_SIZE, "PDF")
+        
+        # 記錄原始大小
+        original_size = os.path.getsize(current_pdf_path)
+        
+        # 決定輸出路徑
+        if not is_temp:
+            base_dir = os.path.dirname(current_pdf_path)
+            base_name = os.path.splitext(os.path.basename(current_pdf_path))[0]
+            output_path = os.path.join(base_dir, f"{base_name}_compressed.pdf")
+            # 避免覆蓋
+            counter = 1
+            while os.path.exists(output_path):
+                output_path = os.path.join(base_dir, f"{base_name}_compressed_{counter}.pdf")
+                counter += 1
+        else:
+            output_path = tempfile.NamedTemporaryFile(delete=False, suffix="_compressed.pdf").name
+        
+        # 導入 PDF 壓縮工具
+        from utils.pdf_tools import PDFToolKit
+        
+        # 執行壓縮
+        if compress_mode == 'basic':
+            result = PDFToolKit.compress_pdf_basic(current_pdf_path, output_path)
+        elif compress_mode == 'image':
+            result = PDFToolKit.compress_pdf_images(current_pdf_path, output_path, quality=quality)
+        elif compress_mode == 'deep':
+            result = PDFToolKit.compress_pdf_deep(current_pdf_path, output_path, quality=quality)
+        else:
+            return [TextContent(type="text", text=f"不支援的壓縮模式: {compress_mode}")]
+        
+        _, _, compressed_size = result
+        
+        # 計算壓縮率
+        if original_size > 0:
+            ratio = (1 - compressed_size / original_size) * 100
+            original_mb = original_size / (1024 * 1024)
+            compressed_mb = compressed_size / (1024 * 1024)
+            
+            msg = (
+                f"✅ PDF 壓縮完成！\n"
+                f"壓縮模式：{compress_mode}\n"
+                f"原始大小：{original_mb:.2f} MB\n"
+                f"壓縮後：{compressed_mb:.2f} MB\n"
+                f"節省了 {ratio:.1f}%"
+            )
+        else:
+            msg = "✅ PDF 壓縮完成！"
+        
+        if not is_temp:
+            msg += f"\n\n檔案已儲存至: {output_path}"
+        
+        # 讀取壓縮後的 PDF 並轉換為 base64
+        pdf_base64 = file_to_base64(output_path)
+        
+        # 清理臨時檔案
+        if is_temp:
+            os.unlink(current_pdf_path)
+            os.unlink(output_path)
+        
+        return [
+            TextContent(type="text", text=msg),
+            EmbeddedResource(
+                type="resource",
+                resource={
+                    "uri": f"data:application/pdf;base64,{pdf_base64}",
+                    "mimeType": "application/pdf",
+                    "text": "壓縮後的 PDF 文件"
+                }
+            )
+        ]
+        
+    except Exception as e:
+        # 清理
+        if is_temp and current_pdf_path and os.path.exists(current_pdf_path):
+            os.unlink(current_pdf_path)
+        if is_temp and output_path and os.path.exists(output_path):
+            os.unlink(output_path)
+        
+        error_msg = format_error_message("PDF 壓縮", e, include_diagnostic=True)
+        return [TextContent(type="text", text=error_msg)]
+
+
+async def handle_md_to_pdf(arguments: dict) -> list[TextContent | EmbeddedResource]:
+    """處理 Markdown 轉 PDF - 支援檔案路徑或直接傳入內容"""
+    md_path_arg = arguments.get("md_path")
+    md_content = arguments.get("md_content")
+    output_dir = arguments.get("output_dir", "")
+    output_filename = arguments.get("output_filename", "output.pdf")
+    
+    temp_md_file = None
+    
+    try:
+        from utils.md_converter import MarkdownConverter
+        
+        # 檢查 Pandoc
+        available, info = MarkdownConverter.check_pandoc()
+        if not available:
+            return [TextContent(type="text", text=f"❌ Pandoc 未安裝：{info}")]
+        
+        # 判斷輸入來源
+        if md_content:
+            # 從內容建立臨時檔案
+            temp_md_file = tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8')
+            temp_md_file.write(md_content)
+            temp_md_file.close()
+            source_path = temp_md_file.name
+        elif md_path_arg:
+            clean_path = md_path_arg.strip('"').strip("'")
+            if not os.path.exists(clean_path):
+                return [TextContent(type="text", text=f"檔案不存在: {clean_path}")]
+            source_path = clean_path
+        else:
+            return [TextContent(type="text", text="需要提供 md_path 或 md_content")]
+        
+        # 決定輸出路徑
+        if output_dir:
+            output_dir = output_dir.strip('"').strip("'")
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+        else:
+            # 預設為桌面
+            output_dir = os.path.expanduser("~/Desktop")
+            if not os.path.exists(output_dir):
+                output_dir = tempfile.gettempdir()
+        
+        # 確保檔名以 .pdf 結尾
+        if not output_filename.lower().endswith('.pdf'):
+            output_filename += '.pdf'
+        
+        output_path = os.path.join(output_dir, output_filename)
+        
+        # 避免覆蓋
+        counter = 1
+        base_name = os.path.splitext(output_filename)[0]
+        while os.path.exists(output_path):
+            output_path = os.path.join(output_dir, f"{base_name}_{counter}.pdf")
+            counter += 1
+        
+        # 轉換
+        MarkdownConverter.md_to_pdf(source_path, output_path)
+        
+        # 清理臨時檔案
+        if temp_md_file:
+            os.unlink(temp_md_file.name)
+        
+        # 讀取 PDF 並轉換為 base64
+        pdf_base64 = file_to_base64(output_path)
+        
+        return [
+            TextContent(type="text", text=f"✅ Markdown 轉 PDF 成功！\n檔案已儲存至: {output_path}"),
+            EmbeddedResource(
+                type="resource",
+                resource={
+                    "uri": f"data:application/pdf;base64,{pdf_base64}",
+                    "mimeType": "application/pdf",
+                    "text": "轉換後的 PDF 文件"
+                }
+            )
+        ]
+        
+    except Exception as e:
+        # 清理臨時檔案
+        if temp_md_file and os.path.exists(temp_md_file.name):
+            os.unlink(temp_md_file.name)
+        return [TextContent(type="text", text=f"❌ 轉換失敗：{str(e)}")]
+
+
+async def handle_md_to_docx(arguments: dict) -> list[TextContent | EmbeddedResource]:
+    """處理 Markdown 轉 Word - 支援檔案路徑或直接傳入內容"""
+    md_path_arg = arguments.get("md_path")
+    md_content = arguments.get("md_content")
+    output_dir = arguments.get("output_dir", "")
+    output_filename = arguments.get("output_filename", "output.docx")
+    
+    temp_md_file = None
+    
+    try:
+        from utils.md_converter import MarkdownConverter
+        
+        # 檢查 Pandoc
+        available, info = MarkdownConverter.check_pandoc()
+        if not available:
+            return [TextContent(type="text", text=f"❌ Pandoc 未安裝：{info}")]
+        
+        # 判斷輸入來源
+        if md_content:
+            # 從內容建立臨時檔案
+            temp_md_file = tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8')
+            temp_md_file.write(md_content)
+            temp_md_file.close()
+            source_path = temp_md_file.name
+        elif md_path_arg:
+            clean_path = md_path_arg.strip('"').strip("'")
+            if not os.path.exists(clean_path):
+                return [TextContent(type="text", text=f"檔案不存在: {clean_path}")]
+            source_path = clean_path
+        else:
+            return [TextContent(type="text", text="需要提供 md_path 或 md_content")]
+        
+        # 決定輸出路徑
+        if output_dir:
+            output_dir = output_dir.strip('"').strip("'")
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+        else:
+            # 預設為桌面
+            output_dir = os.path.expanduser("~/Desktop")
+            if not os.path.exists(output_dir):
+                output_dir = tempfile.gettempdir()
+        
+        # 確保檔名以 .docx 結尾
+        if not output_filename.lower().endswith('.docx'):
+            output_filename += '.docx'
+        
+        output_path = os.path.join(output_dir, output_filename)
+        
+        # 避免覆蓋
+        counter = 1
+        base_name = os.path.splitext(output_filename)[0]
+        while os.path.exists(output_path):
+            output_path = os.path.join(output_dir, f"{base_name}_{counter}.docx")
+            counter += 1
+        
+        # 轉換
+        MarkdownConverter.md_to_docx(source_path, output_path)
+        
+        # 清理臨時檔案
+        if temp_md_file:
+            os.unlink(temp_md_file.name)
+        
+        # 讀取 DOCX 並轉換為 base64
+        docx_base64 = file_to_base64(output_path)
+        
+        return [
+            TextContent(type="text", text=f"✅ Markdown 轉 Word 成功！\n檔案已儲存至: {output_path}"),
+            EmbeddedResource(
+                type="resource",
+                resource={
+                    "uri": f"data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,{docx_base64}",
+                    "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "text": "轉換後的 Word 文件"
+                }
+            )
+        ]
+        
+    except Exception as e:
+        # 清理臨時檔案
+        if temp_md_file and os.path.exists(temp_md_file.name):
+            os.unlink(temp_md_file.name)
+        return [TextContent(type="text", text=f"❌ 轉換失敗：{str(e)}")]
+
+
+async def handle_docx_to_md(arguments: dict) -> list[TextContent]:
+    """處理 Word 轉 Markdown"""
+    docx_path_arg = arguments.get("docx_path")
+    
+    if not docx_path_arg:
+        return [TextContent(type="text", text="需要提供 docx_path")]
+    
+    clean_path = docx_path_arg.strip('"').strip("'")
+    if not os.path.exists(clean_path):
+        return [TextContent(type="text", text=f"檔案不存在: {clean_path}")]
+    
+    # 決定輸出路徑
+    base_name = os.path.splitext(clean_path)[0]
+    output_path = f"{base_name}.md"
+    counter = 1
+    while os.path.exists(output_path):
+        output_path = f"{base_name}_{counter}.md"
+        counter += 1
+    
+    try:
+        from utils.md_converter import MarkdownConverter
+        
+        # 檢查 Pandoc
+        available, info = MarkdownConverter.check_pandoc()
+        if not available:
+            return [TextContent(type="text", text=f"❌ Pandoc 未安裝：{info}")]
+        
+        MarkdownConverter.docx_to_md(clean_path, output_path)
+        
+        # 讀取生成的 Markdown 內容
+        with open(output_path, 'r', encoding='utf-8') as f:
+            md_content = f.read()
+        
+        # 只顯示前 2000 字元
+        preview = md_content[:2000]
+        if len(md_content) > 2000:
+            preview += "\n\n...(內容過長，已截斷)"
+        
+        return [
+            TextContent(type="text", text=f"✅ Word 轉 Markdown 成功！\n檔案已儲存至: {output_path}\n\n---\n預覽：\n{preview}")
+        ]
+        
+    except Exception as e:
+        return [TextContent(type="text", text=f"❌ 轉換失敗：{str(e)}")]
+
 
 async def main():
     # Configure logging to write to stderr

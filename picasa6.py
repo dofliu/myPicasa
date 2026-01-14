@@ -3764,7 +3764,7 @@ class MediaToolkit(QMainWindow):
         self.pdf_split_input = QLineEdit()
         self.pdf_split_input.setPlaceholderText("請選擇 PDF 文件...")
         btn_browse = QPushButton("📂 瀏覽")
-        btn_browse.clicked.connect(lambda: self._browse_pdf(self.pdf_split_input, 'pdf_split'))
+        btn_browse.clicked.connect(lambda: self._browse_pdf_generic(self.pdf_split_input, 'pdf_split'))
         file_layout.addWidget(self.pdf_split_input)
         file_layout.addWidget(btn_browse)
         split_layout.addLayout(file_layout)
@@ -3801,7 +3801,7 @@ class MediaToolkit(QMainWindow):
         self.pdf_img_input = QLineEdit()
         self.pdf_img_input.setPlaceholderText("請選擇 PDF 文件...")
         btn_browse2 = QPushButton("📂 瀏覽")
-        btn_browse2.clicked.connect(lambda: self._browse_pdf(self.pdf_img_input, 'pdf_img'))
+        btn_browse2.clicked.connect(lambda: self._browse_pdf_generic(self.pdf_img_input, 'pdf_img'))
         file_layout2.addWidget(self.pdf_img_input)
         file_layout2.addWidget(btn_browse2)
         img_layout.addLayout(file_layout2)
@@ -3839,7 +3839,7 @@ class MediaToolkit(QMainWindow):
         self.pdf_compress_input = QLineEdit()
         self.pdf_compress_input.setPlaceholderText("請選擇要壓縮的 PDF 文件...")
         btn_browse3 = QPushButton("📂 瀏覽")
-        btn_browse3.clicked.connect(lambda: self._browse_pdf(self.pdf_compress_input, 'pdf_compress'))
+        btn_browse3.clicked.connect(lambda: self._browse_pdf_generic(self.pdf_compress_input, 'pdf_compress'))
         file_layout3.addWidget(self.pdf_compress_input)
         file_layout3.addWidget(btn_browse3)
         compress_layout.addLayout(file_layout3)
@@ -3908,7 +3908,7 @@ class MediaToolkit(QMainWindow):
         layout.addStretch()
         self.doc_tabs.addTab(tab, "🛠️ PDF 進階工具")
 
-    def _browse_pdf(self, input_widget, key_prefix):
+    def _browse_pdf_generic(self, input_widget, key_prefix):
         """選擇 PDF 文件 (通用)"""
         start_dir = self.config.get(f'document.last_{key_prefix}_folder', '')
         file, _ = QFileDialog.getOpenFileName(

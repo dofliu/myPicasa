@@ -573,7 +573,125 @@ class ImageCompressionWorker(QThread):
         self.is_cancelled = True
 
 
+
+class VideoCompressionWorker(QThread):
+    """影片壓縮工作執行緒"""
+    progress = pyqtSignal(int)
+    status = pyqtSignal(str)
+    stats = pyqtSignal(str)  # 壓縮統計資訊
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, files, resolution, crf, output_folder):
+        super().__init__()
+        self.files = files
+        self.resolution = resolution  # 'Original', '1080p', '720p', '480p'
+        self.crf = crf
+        self.output_folder = output_folder
+        self.is_cancelled = False
+
+    def run(self):
+        try:
+            total = len(self.files)
+            success_count = 0
+            original_size = 0
+            compressed_size = 0
+
+            # 建立輸出資料夾
+            if self.output_folder and not os.path.exists(self.output_folder):
+                os.makedirs(self.output_folder)
+
+            for i, file in enumerate(self.files):
+                if self.is_cancelled:
+                    self.finished.emit(False, f"操作已取消（已壓縮 {success_count}/{total}）")
+                    return
+
+                try:
+                    self.status.emit(f"壓縮 {i+1}/{total}: {os.path.basename(file)}")
+
+                    # 獲取原始檔案大小
+                    orig_size = os.path.getsize(file)
+                    original_size += orig_size
+
+                    # 設定輸出路徑
+                    base = os.path.splitext(os.path.basename(file))[0]
+                    # 預設輸出為 MP4 以確保相容性
+                    if self.output_folder:
+                        save_path = os.path.join(self.output_folder, f"{base}_compressed.mp4")
+                    else:
+                        save_path = os.path.join(os.path.dirname(file), f"{base}_compressed.mp4")
+
+                    # 載入影片
+                    clip = VideoFileClip(file)
+                    
+                    # 處理解析度
+                    if self.resolution != 'Original':
+                        target_h = int(self.resolution.replace('p', ''))
+                        if clip.h > target_h:
+                            clip = clip.resize(height=target_h)
+
+                    # 壓縮並儲存
+                    # audio_codec='aac' 確保音訊相容性
+                    # preset='medium' 平衡速度與壓縮率
+                    # threads=4 使用多執行緒
+                    clip.write_videofile(
+                        save_path,
+                        codec=Config.VIDEO_CODEC,
+                        audio_codec=Config.AUDIO_CODEC,
+                        ffmpeg_params=['-crf', str(self.crf), '-pix_fmt', 'yuv420p'],
+                        preset='medium',
+                        threads=4,
+                        logger=None,
+                        temp_audiofile='temp-audio.m4a',
+                        remove_temp=True
+                    )
+                    
+                    clip.close()
+
+                    # 獲取壓縮後檔案大小
+                    comp_size = os.path.getsize(save_path)
+                    compressed_size += comp_size
+
+                    success_count += 1
+
+                    # 計算節省百分比
+                    if orig_size > 0:
+                        saved_percent = ((orig_size - comp_size) / orig_size) * 100
+                        self.stats.emit(
+                            f"原始：{orig_size/(1024*1024):.1f} MB → "
+                            f"壓縮：{comp_size/(1024*1024):.1f} MB "
+                            f"（節省 {saved_percent:.1f}%）"
+                        )
+
+                except Exception as e:
+                    print(f"壓縮失敗：{file} - {e}")
+
+                progress_pct = int((i + 1) / total * 100)
+                self.progress.emit(progress_pct)
+
+            if success_count > 0:
+                total_saved = original_size - compressed_size
+                total_saved_percent = (total_saved / original_size * 100) if original_size > 0 else 0
+
+                message = (
+                    f"成功壓縮 {success_count}/{total} 個檔案！\n\n"
+                    f"原始總大小：{original_size/(1024*1024):.2f} MB\n"
+                    f"壓縮後大小：{compressed_size/(1024*1024):.2f} MB\n"
+                    f"節省空間：{total_saved/(1024*1024):.2f} MB ({total_saved_percent:.1f}%)"
+                )
+                self.finished.emit(True, message)
+            else:
+                self.finished.emit(False, "壓縮失敗")
+
+        except Exception as e:
+            self.finished.emit(False, f"壓縮過程發生錯誤：{str(e)}")
+
+    def cancel(self):
+        """取消操作"""
+        self.is_cancelled = True
+
+
 class MarkdownConversionWorker(QThread):
+
     """Markdown 轉換 Word 工作執行緒"""
     progress = pyqtSignal(int)
     status = pyqtSignal(str)
@@ -921,6 +1039,7 @@ class MediaToolkit(QMainWindow):
         self._create_convert_tab()
         self._create_video_to_gif_tab()
         self._create_image_compression_tab()
+        self._create_video_compression_tab()  # 新增影片壓縮分頁
         self._create_image_editor_tab()
         media_layout.addWidget(self.media_tabs)
         
@@ -2529,6 +2648,51 @@ class MediaToolkit(QMainWindow):
         if add_watermark(files, self):
             self.show_info("浮水印添加完成！")
 
+    def _set_ui_enabled(self, enabled):
+        """啟用/禁用 UI"""
+        self.category_tabs.setEnabled(enabled)
+        # 確保按鈕狀態正確
+        if hasattr(self, 'btn_start_compress_video'):
+            self.btn_start_compress_video.setEnabled(enabled)
+
+    def _update_progress(self, value):
+        """通用進度更新"""
+        # 嘗試更新影片壓縮的進度條
+        if hasattr(self, 'compress_progress') and self.compress_progress.isVisible():
+            self.compress_progress.setValue(value)
+
+    def _update_status(self, message):
+        """通用狀態更新"""
+        # 嘗試更新影片壓縮的狀態標籤
+        if hasattr(self, 'compress_status_label') and self.compress_status_label.isVisible():
+            self.compress_status_label.setText(message) 
+        # 也可以顯示在狀態列
+        self.statusBar().showMessage(message)
+
+    def _on_worker_finished(self, success, message):
+        """通用 Worker 完成回調"""
+        if success:
+            QMessageBox.information(self, Config.UI_TEXT['success'], message)
+        else:
+            QMessageBox.critical(self, Config.UI_TEXT['error'], f"操作失敗：\n{message}")
+
+    def select_files_for_list(self, list_widget, filter_str, title="選擇檔案"):
+        """通用檔案選擇方法"""
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            title,
+            "",
+            f"{filter_str};;All Files (*)"
+        )
+        if files:
+            list_widget.add_files(files)
+
+    def _browse_folder(self, line_edit):
+        """通用資料夾瀏覽方法"""
+        folder = QFileDialog.getExistingDirectory(self, "選擇資料夾")
+        if folder:
+            line_edit.setText(folder)
+
     def select_files(self):
         start_dir = self.config.get('image.last_folder', '')
         files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片", start_dir or "", Config.IMAGE_FILE_FILTER)
@@ -3453,7 +3617,171 @@ class MediaToolkit(QMainWindow):
         
         self.utils_tabs.addTab(tab, "📝 批次重新命名")
 
+    
+    def _create_video_compression_tab(self):
+        """影片壓縮分頁"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(16)
+
+        # 檔案選擇
+        group = self._create_group_box("📁 選擇影片檔案 - 支援多選與拖放")
+        file_layout = QVBoxLayout()
+        
+        btn_layout = QHBoxLayout()
+        btn_select = QPushButton("📂 選擇影片")
+        btn_select.clicked.connect(lambda: self.select_files_for_list(
+            self.compress_video_list, 
+            Config.VIDEO_FILE_FILTER,
+            "選擇影片檔案"
+        ))
+        btn_select.setMinimumHeight(40)
+        btn_layout.addWidget(btn_select)
+        
+        btn_clear = QPushButton("🗑️ 清空列表")
+        btn_clear.clicked.connect(lambda: self.compress_video_list.clear())
+        btn_clear.setFixedWidth(100)
+        btn_clear.setMinimumHeight(40)
+        btn_layout.addWidget(btn_clear)
+        
+        btn_layout.addStretch()
+        file_layout.addLayout(btn_layout)
+        
+        self.compress_video_list = DragDropListWidget()
+        self.compress_video_list.setMinimumHeight(150)
+        file_layout.addWidget(self.compress_video_list)
+        group.setLayout(file_layout)
+        layout.addWidget(group)
+
+        # 壓縮設定
+        params = self._create_group_box("⚙️ 壓縮參數")
+        p_layout = QVBoxLayout()
+        
+        # 解析度選擇
+        res_layout = QHBoxLayout()
+        res_layout.addWidget(QLabel("目標解析度:"))
+        self.compress_res_combo = QComboBox()
+        self.compress_res_combo.addItems(["Original", "1080p", "720p", "480p"])
+        self.compress_res_combo.setCurrentText("720p") # 預設 720p
+        res_layout.addWidget(self.compress_res_combo)
+        res_layout.addStretch()
+        p_layout.addLayout(res_layout)
+        
+        # 品質 CRF
+        crf_layout = QHBoxLayout()
+        crf_layout.addWidget(QLabel("壓縮品質 (CRF):"))
+        self.crf_spin = QSpinBox()
+        self.crf_spin.setRange(18, 35)
+        self.crf_spin.setValue(23) # 預設 23 (良好平衡)
+        crf_layout.addWidget(self.crf_spin)
+        
+        self.crf_slider = QSlider(Qt.Horizontal)
+        self.crf_slider.setRange(18, 35)
+        self.crf_slider.setValue(23)
+        self.crf_slider.valueChanged.connect(self.crf_spin.setValue)
+        self.crf_spin.valueChanged.connect(self.crf_slider.setValue)
+        crf_layout.addWidget(self.crf_slider)
+        
+        note_label = QLabel("(數值越小畫質越好，預設 23，範圍 18-35)")
+        note_label.setStyleSheet("color: gray; font-size: 9pt;")
+        crf_layout.addWidget(note_label)
+        
+        p_layout.addLayout(crf_layout)
+        params.setLayout(p_layout)
+        layout.addWidget(params)
+
+        # 輸出設定
+        out_group = self._create_group_box("💾 輸出設定")
+        out_layout = QVBoxLayout()
+        
+        path_layout = QHBoxLayout()
+        self.compress_out_path = QLineEdit()
+        self.compress_out_path.setPlaceholderText("留空則儲存於原資料夾 (自動加上 _compressed)")
+        path_layout.addWidget(QLabel("輸出資料夾:"))
+        path_layout.addWidget(self.compress_out_path)
+        
+        btn_browse = QPushButton("瀏覽")
+        btn_browse.clicked.connect(lambda: self._browse_folder(self.compress_out_path))
+        path_layout.addWidget(btn_browse)
+        out_layout.addLayout(path_layout)
+        out_group.setLayout(out_layout)
+        layout.addWidget(out_group)
+
+        # 進度顯示區域
+        self.compress_progress_widget = QWidget()
+        prog_layout = QVBoxLayout(self.compress_progress_widget)
+        prog_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.compress_status_label = QLabel("就緒")
+        self.compress_status_label.setStyleSheet("color: #64748B; font-size: 10pt;")
+        prog_layout.addWidget(self.compress_status_label)
+
+        self.compress_progress = QProgressBar()
+        self.compress_progress.setTextVisible(True)
+        self.compress_progress.setValue(0)
+        prog_layout.addWidget(self.compress_progress)
+
+        self.compress_progress_widget.setVisible(False)
+        layout.addWidget(self.compress_progress_widget)
+
+        # 執行按鈕
+        action_layout = QHBoxLayout()
+        self.btn_start_compress_video = QPushButton("🎬 開始壓縮影片")
+        self.btn_start_compress_video.setProperty("primary", True)
+        self.btn_start_compress_video.setMinimumHeight(50)
+        self.btn_start_compress_video.clicked.connect(self._start_video_compression)
+        action_layout.addWidget(self.btn_start_compress_video)
+        layout.addLayout(action_layout)
+
+        layout.addStretch()
+        self.media_tabs.addTab(tab, "📉 影片壓縮")
+
+    def _start_video_compression(self):
+        """開始執行影片壓縮"""
+        files = self.compress_video_list.get_all_files()
+        if not files:
+            QMessageBox.warning(self, Config.UI_TEXT['warning'], Config.MESSAGES['no_videos_selected'])
+            return
+
+        resolution = self.compress_res_combo.currentText()
+        crf = self.crf_spin.value()
+        output_folder = self.compress_out_path.text().strip()
+
+        # 禁用 UI
+        self._set_ui_enabled(False)
+        self.btn_start_compress_video.setText("正在壓縮... (請觀察終端機輸出)")
+        self.btn_start_compress_video.setEnabled(False)
+
+        # 顯示進度
+        if hasattr(self, 'compress_progress_widget'):
+            self.compress_progress_widget.setVisible(True)
+            self.compress_progress.setValue(0)
+            self.compress_status_label.setText("準備中...")
+
+        # 啟動 Worker
+        self.video_compress_worker = VideoCompressionWorker(files, resolution, crf, output_folder)
+        self.video_compress_worker.progress.connect(self._update_progress)
+        self.video_compress_worker.status.connect(self._update_status)
+        self.video_compress_worker.stats.connect(lambda s: self.statusBar().showMessage(s)) # 顯示統計
+        self.video_compress_worker.finished.connect(self._on_video_compression_finished)
+        
+        self.task_manager.add_task(self.video_compress_worker, "影片壓縮")
+        self.video_compress_worker.start()
+
+    def _on_video_compression_finished(self, success, message):
+        """影片壓縮完成回調"""
+        self._set_ui_enabled(True)
+        self.btn_start_compress_video.setText("🎬 開始壓縮影片")
+        self.btn_start_compress_video.setEnabled(True)
+        
+        if hasattr(self, 'compress_progress_widget'):
+            self.compress_progress_widget.setVisible(False)
+            
+        self._on_worker_finished(success, message)
+        self.statusBar().showMessage(Config.UI_TEXT['completed'])
+    
     def _create_image_editor_tab(self):
+
         """建立圖片編輯分頁"""
         tab = QWidget()
         layout = QVBoxLayout(tab)

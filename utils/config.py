@@ -49,6 +49,7 @@ class Config:
         'error': '錯誤',
         'completed': '完成',
         'progress': '進度',
+        'success': '成功',
     }
 
     # 訊息文字

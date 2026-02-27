@@ -3801,7 +3801,11 @@ class MediaToolkit(QMainWindow):
         drive_layout.addWidget(QLabel("目標磁碟:"))
         self.comboCleanupDrive = QComboBox()
         self.comboCleanupDrive.addItems(self.get_available_drives())
+        self.comboCleanupDrive.currentIndexChanged.connect(self._update_drive_space_display)
         drive_layout.addWidget(self.comboCleanupDrive)
+        
+        self.lblDriveUsage = QLabel("")
+        drive_layout.addWidget(self.lblDriveUsage)
 
         btn_scan_cleanup = QPushButton("掃描清理建議")
         btn_scan_cleanup.clicked.connect(self.scanCleanupCandidates)
@@ -3826,16 +3830,40 @@ class MediaToolkit(QMainWindow):
         self.cleanupTree.setColumnWidth(0, 250)
         self.cleanupTree.setColumnWidth(1, 100)
         self.cleanupTree.setColumnWidth(2, 60)
+        self.cleanupTree.itemDoubleClicked.connect(self._on_tree_item_double_clicked)
         cleanup_layout.addWidget(self.cleanupTree)
 
         self.lblCleanupSummary = QLabel("尚未掃描")
         cleanup_layout.addWidget(self.lblCleanupSummary)
 
-        btn_delete_selected = QPushButton("刪除勾選項目")
+        btn_delete_selected = QPushButton("刪除 (移至資源回收桶)")
         btn_delete_selected.clicked.connect(self.deleteSelectedCleanupItems)
         cleanup_layout.addWidget(btn_delete_selected)
 
         self.utils_tabs.addTab(cleanup_tab, "🧹 硬碟清理建議")
+        self._update_drive_space_display()
+
+    def _update_drive_space_display(self):
+        import shutil
+        drive = self.comboCleanupDrive.currentText().strip("\\/")
+        if os.path.exists(drive + "\\"):
+            try:
+                total, used, free = shutil.disk_usage(drive + "\\")
+                percent = (used / total) * 100
+                self.lblDriveUsage.setText(
+                    f"可用: {self.format_size(free)} / 總計: {self.format_size(total)} ({percent:.1f}% 已用)"
+                )
+            except Exception:
+                self.lblDriveUsage.setText("無法取得磁碟資訊")
+
+    def _on_tree_item_double_clicked(self, item, column):
+        path = item.data(0, Qt.UserRole)
+        if path and os.path.exists(path):
+            if os.path.isfile(path):
+                # If it's a file, open its parent directory
+                os.startfile(os.path.dirname(path))
+            else:
+                os.startfile(path)
 
     def get_available_drives(self):
         if os.name != "nt":
@@ -3987,6 +4015,12 @@ class MediaToolkit(QMainWindow):
 
     def deleteSelectedCleanupItems(self):
         import shutil
+        try:
+            from send2trash import send2trash
+        except ImportError:
+            QMessageBox.critical(self, "錯誤", "找不到 send2trash 模組，請先安裝:\npip install send2trash")
+            return
+            
         selected_paths = []
         
         # Traverse tree to find checked leaf items
@@ -4007,7 +4041,7 @@ class MediaToolkit(QMainWindow):
         confirm = QMessageBox.question(
             self,
             "確認刪除",
-            f"即將刪除 {len(selected_paths)} 個項目，這個動作無法復原。是否繼續？",
+            f"即將刪除 {len(selected_paths)} 個項目，這些檔案將被安全移至「資源回收桶」。是否繼續？",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -4025,15 +4059,13 @@ class MediaToolkit(QMainWindow):
                     continue
 
                 if os.path.isfile(path):
-                    os.remove(path)
+                    send2trash(path)
                 elif os.path.isdir(path):
                     for name in os.listdir(path):
                         child = os.path.join(path, name)
                         try:
-                            if os.path.isdir(child):
-                                shutil.rmtree(child)
-                            else:
-                                os.remove(child)
+                            # Send individual items to trash to preserve the root cache folder itself
+                            send2trash(child)
                         except Exception as child_err:
                             error_messages.append(f"{child}: {child_err}")
                 deleted_count += 1

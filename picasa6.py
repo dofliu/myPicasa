@@ -67,6 +67,7 @@ class ImageTool(QMainWindow):
         self._createVideoTab()
         self._createConvertImageTab()
         self._createCleanupTab()
+        self.cleanup_candidates_map = {}
 
     def _createCleanupTab(self):
         cleanup_tab = QWidget()
@@ -171,6 +172,7 @@ class ImageTool(QMainWindow):
 
     def scanCleanupCandidates(self):
         self.cleanupList.clear()
+        self.cleanup_candidates_map = {}
         drive_root = self.comboCleanupDrive.currentText()
         candidates = self.get_cleanup_candidates(drive_root)
 
@@ -187,6 +189,7 @@ class ImageTool(QMainWindow):
 
             shown_count += 1
             total_size += size
+            self.cleanup_candidates_map[path] = candidate["label"]
             item_text = f"[{candidate['label']}] {path}（約 {self.format_size(size)}）"
             item = QListWidgetItem(item_text)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -228,18 +231,22 @@ class ImageTool(QMainWindow):
 
         for path in selected_paths:
             try:
+                if path not in self.cleanup_candidates_map:
+                    error_messages.append(f"{path}: 不在目前掃描建議清單中，已略過")
+                    continue
+
                 if os.path.isfile(path):
                     os.remove(path)
                 elif os.path.isdir(path):
                     for name in os.listdir(path):
                         child = os.path.join(path, name)
-                        if os.path.isdir(child):
-                            shutil.rmtree(child, ignore_errors=True)
-                        else:
-                            try:
+                        try:
+                            if os.path.isdir(child):
+                                shutil.rmtree(child)
+                            else:
                                 os.remove(child)
-                            except OSError:
-                                pass
+                        except Exception as child_err:
+                            error_messages.append(f"{child}: {child_err}")
                 deleted_count += 1
             except Exception as e:
                 error_messages.append(f"{path}: {e}")

@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QListWidget, QComboBox, QFileDialog,
     QMessageBox, QTabWidget, QProgressBar, QGroupBox, QAction, QInputDialog,
-    QGridLayout, QSpinBox, QDoubleSpinBox, QCheckBox, QSlider
+    QGridLayout, QSpinBox, QDoubleSpinBox, QCheckBox, QSlider, QListWidgetItem
 )
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -1066,6 +1066,7 @@ class MediaToolkit(QMainWindow):
         self.utils_tabs = QTabWidget()
         self.utils_tabs.setDocumentMode(True)
         self._create_batch_rename_tab()
+        self._createCleanupTab()
         utils_layout.addWidget(self.utils_tabs)
         
         self.category_tabs.addTab(utils_widget, "🛠️ 實用工具")
@@ -3616,6 +3617,196 @@ class MediaToolkit(QMainWindow):
         layout.addLayout(action_layout)
         
         self.utils_tabs.addTab(tab, "📝 批次重新命名")
+
+    def _createCleanupTab(self):
+        cleanup_tab = QWidget()
+        cleanup_layout = QVBoxLayout(cleanup_tab)
+
+        cleanup_desc = QLabel(
+            "掃描 Windows 常見會持續累積的暫存資料夾（例如 Temp、快取、回收桶），\n"
+            "勾選後可一鍵清理。請先確認資料夾內容。"
+        )
+        cleanup_desc.setWordWrap(True)
+        cleanup_layout.addWidget(cleanup_desc)
+
+        drive_layout = QHBoxLayout()
+        drive_layout.addWidget(QLabel("目標磁碟:"))
+        self.comboCleanupDrive = QComboBox()
+        self.comboCleanupDrive.addItems(self.get_available_drives())
+        drive_layout.addWidget(self.comboCleanupDrive)
+
+        btn_scan_cleanup = QPushButton("掃描清理建議")
+        btn_scan_cleanup.clicked.connect(self.scanCleanupCandidates)
+        drive_layout.addWidget(btn_scan_cleanup)
+        drive_layout.addStretch()
+        cleanup_layout.addLayout(drive_layout)
+
+        self.cleanupList = QListWidget()
+        cleanup_layout.addWidget(self.cleanupList)
+
+        self.lblCleanupSummary = QLabel("尚未掃描")
+        cleanup_layout.addWidget(self.lblCleanupSummary)
+
+        btn_delete_selected = QPushButton("刪除勾選項目")
+        btn_delete_selected.clicked.connect(self.deleteSelectedCleanupItems)
+        cleanup_layout.addWidget(btn_delete_selected)
+
+        self.utils_tabs.addTab(cleanup_tab, "🧹 硬碟清理建議")
+
+    def get_available_drives(self):
+        if os.name != "nt":
+            return ["/"]
+
+        drives = []
+        for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+            drive_path = f"{letter}:\\"
+            if os.path.exists(drive_path):
+                drives.append(drive_path)
+        return drives if drives else ["C:\\"]
+
+    def get_cleanup_candidates(self, drive_root):
+        candidates = []
+        if os.name != "nt":
+            return [
+                {"label": "系統暫存資料夾", "path": "/tmp"},
+                {"label": "使用者快取資料夾", "path": os.path.expanduser("~/.cache")},
+            ]
+
+        drive = drive_root.rstrip("\\/")
+        home_dir = os.path.expanduser("~")
+        user_profile = home_dir if home_dir.startswith(drive) else None
+
+        candidates.extend([
+            {"label": "Windows 暫存資料夾", "path": f"{drive}\\Windows\\Temp"},
+            {"label": "Windows 更新下載快取", "path": f"{drive}\\Windows\\SoftwareDistribution\\Download"},
+            {"label": "系統回收桶", "path": f"{drive}\\$Recycle.Bin"},
+        ])
+
+        if user_profile:
+            candidates.extend([
+                {"label": "使用者 Temp", "path": os.path.join(user_profile, "AppData", "Local", "Temp")},
+                {"label": "IE/Edge 快取", "path": os.path.join(user_profile, "AppData", "Local", "Microsoft", "Windows", "INetCache")},
+                {"label": "縮圖快取", "path": os.path.join(user_profile, "AppData", "Local", "Microsoft", "Windows", "Explorer")},
+                {"label": "程式崩潰記錄", "path": os.path.join(user_profile, "AppData", "Local", "CrashDumps")},
+            ])
+
+        return candidates
+
+    def calculate_folder_size(self, path):
+        total_size = 0
+        try:
+            if os.path.isfile(path):
+                return os.path.getsize(path)
+
+            for root, _, files in os.walk(path):
+                for file_name in files:
+                    file_path = os.path.join(root, file_name)
+                    try:
+                        if not os.path.islink(file_path):
+                            total_size += os.path.getsize(file_path)
+                    except OSError:
+                        continue
+        except OSError:
+            return 0
+        return total_size
+
+    def format_size(self, size_bytes):
+        units = ["B", "KB", "MB", "GB", "TB"]
+        size = float(size_bytes)
+        for unit in units:
+            if size < 1024 or unit == units[-1]:
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size_bytes} B"
+
+    def scanCleanupCandidates(self):
+        self.cleanupList.clear()
+        self.cleanup_candidates_map = {}
+        drive_root = self.comboCleanupDrive.currentText()
+        candidates = self.get_cleanup_candidates(drive_root)
+
+        total_size = 0
+        shown_count = 0
+        for candidate in candidates:
+            path = candidate["path"]
+            if not os.path.exists(path):
+                continue
+
+            size = self.calculate_folder_size(path)
+            if size <= 0:
+                continue
+
+            shown_count += 1
+            total_size += size
+            self.cleanup_candidates_map[path] = candidate["label"]
+            item_text = f"[{candidate['label']}] {path}（約 {self.format_size(size)}）"
+            item = QListWidgetItem(item_text)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            item.setData(Qt.UserRole, path)
+            self.cleanupList.addItem(item)
+
+        if shown_count == 0:
+            self.lblCleanupSummary.setText("未找到可建議清理的項目，或目前資料夾大小為 0")
+            QMessageBox.information(self, "掃描完成", "沒有找到可清理建議。")
+        else:
+            self.lblCleanupSummary.setText(
+                f"共找到 {shown_count} 個建議項目，預估可釋放 {self.format_size(total_size)}"
+            )
+
+    def deleteSelectedCleanupItems(self):
+        import shutil
+        selected_paths = []
+        for index in range(self.cleanupList.count()):
+            item = self.cleanupList.item(index)
+            if item.checkState() == Qt.Checked:
+                selected_paths.append(item.data(Qt.UserRole))
+
+        if not selected_paths:
+            QMessageBox.warning(self, "警告", "請先勾選要刪除的項目")
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "確認刪除",
+            f"即將刪除 {len(selected_paths)} 個項目，這個動作無法復原。是否繼續？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        deleted_count = 0
+        error_messages = []
+
+        for path in selected_paths:
+            try:
+                if path not in self.cleanup_candidates_map:
+                    error_messages.append(f"{path}: 不在目前掃描建議清單中，已略過")
+                    continue
+
+                if os.path.isfile(path):
+                    os.remove(path)
+                elif os.path.isdir(path):
+                    for name in os.listdir(path):
+                        child = os.path.join(path, name)
+                        try:
+                            if os.path.isdir(child):
+                                shutil.rmtree(child)
+                            else:
+                                os.remove(child)
+                        except Exception as child_err:
+                            error_messages.append(f"{child}: {child_err}")
+                deleted_count += 1
+            except Exception as e:
+                error_messages.append(f"{path}: {e}")
+
+        self.scanCleanupCandidates()
+
+        message = f"已處理 {deleted_count} 個項目。"
+        if error_messages:
+            message += "\n\n以下項目刪除失敗：\n" + "\n".join(error_messages[:5])
+        QMessageBox.information(self, "清理完成", message)
 
     
     def _create_video_compression_tab(self):

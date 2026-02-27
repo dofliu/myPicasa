@@ -27,7 +27,7 @@ from natsort import natsorted
 class DiskScanWorker(QThread):
     progress_signal = pyqtSignal(str)
     item_found_signal = pyqtSignal(dict)  # emits dict with path, size, type
-    finished_signal = pyqtSignal(int, int) # emits total bytes, total items
+    finished_signal = pyqtSignal(object, int) # emits total bytes, total items
 
     def __init__(self, drive_root, scan_common, scan_appdata, scan_large):
         super().__init__()
@@ -3822,9 +3822,10 @@ class MediaToolkit(QMainWindow):
         cleanup_layout.addLayout(options_layout)
 
         self.cleanupTree = QTreeWidget()
-        self.cleanupTree.setHeaderLabels(["名稱 / 路徑", "大小", "類型"])
-        self.cleanupTree.setColumnWidth(0, 450)
+        self.cleanupTree.setHeaderLabels(["名稱", "大小", "類型", "完整路徑"])
+        self.cleanupTree.setColumnWidth(0, 250)
         self.cleanupTree.setColumnWidth(1, 100)
+        self.cleanupTree.setColumnWidth(2, 60)
         cleanup_layout.addWidget(self.cleanupTree)
 
         self.lblCleanupSummary = QLabel("尚未掃描")
@@ -3965,7 +3966,9 @@ class MediaToolkit(QMainWindow):
         child.setText(0, item_data["label"])
         child.setText(1, self.format_size(item_data["size"]))
         child.setText(2, "資料夾" if item_data.get("isdir") else "檔案")
+        child.setText(3, path)  # Show full path in the 4th column
         child.setToolTip(0, path)
+        child.setToolTip(3, path)
         child.setData(0, Qt.UserRole, path)
         child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
         child.setCheckState(0, Qt.Unchecked)

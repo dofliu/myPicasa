@@ -13,7 +13,8 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QListWidget, QComboBox, QFileDialog,
     QMessageBox, QTabWidget, QProgressBar, QGroupBox, QAction, QInputDialog,
-    QGridLayout, QSpinBox, QDoubleSpinBox, QCheckBox, QSlider, QListWidgetItem
+    QGridLayout, QSpinBox, QDoubleSpinBox, QCheckBox, QSlider, QListWidgetItem,
+    QTreeWidget, QTreeWidgetItem
 )
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -22,6 +23,173 @@ import tempfile
 from PIL import Image
 from moviepy.editor import VideoFileClip, concatenate_videoclips
 from natsort import natsorted
+
+class DiskScanWorker(QThread):
+    progress_signal = pyqtSignal(str)
+    item_found_signal = pyqtSignal(dict)  # emits dict with path, size, type
+    finished_signal = pyqtSignal(int, int) # emits total bytes, total items
+
+    def __init__(self, drive_root, scan_common, scan_appdata, scan_large):
+        super().__init__()
+        self.drive_root = drive_root
+        self.scan_common = scan_common
+        self.scan_appdata = scan_appdata
+        self.scan_large = scan_large
+        self.min_large_file_mb = 500
+        self._is_running = True
+        self.total_size = 0
+        self.total_count = 0
+
+    def stop(self):
+        self._is_running = False
+
+    def run(self):
+        # Scan common caches
+        if self.scan_common:
+            self.progress_signal.emit("正在掃描常見快取清單...")
+            candidates = self.get_common_candidates(self.drive_root)
+            for candidate in candidates:
+                if not self._is_running: break
+                path = candidate["path"]
+                if os.path.exists(path):
+                    self.progress_signal.emit(f"檢查快取: {candidate['label']}")
+                    size = self.calculate_folder_size(path)
+                    if size > 0:
+                        self.item_found_signal.emit({
+                            "type": "common",
+                            "label": candidate["label"],
+                            "path": path,
+                            "size": size,
+                            "isdir": True
+                        })
+                        self.total_size += size
+                        self.total_count += 1
+
+        # Scan large files in drive
+        if self.scan_large and self._is_running:
+            self.progress_signal.emit(f"正在全碟掃描超大檔案 (> {self.min_large_file_mb}MB)...")
+            self.scan_large_files(self.drive_root)
+            
+        # Optional: Deep Scan AppData
+        if self.scan_appdata and self._is_running:
+            home_dir = os.path.expanduser("~")
+            appdata_local = os.path.join(home_dir, "AppData", "Local")
+            appdata_roaming = os.path.join(home_dir, "AppData", "Roaming")
+            self.progress_signal.emit("深入分析 AppData (Local/Roaming)...")
+            
+            if os.path.exists(appdata_local):
+                self.deep_scan_directory(appdata_local, "appdata")
+            if os.path.exists(appdata_roaming):
+                self.deep_scan_directory(appdata_roaming, "appdata")
+                
+        self.finished_signal.emit(self.total_size, self.total_count)
+
+    def scan_large_files(self, start_path):
+        min_bytes = self.min_large_file_mb * 1024 * 1024
+        try:
+            for root, dirs, files in os.walk(start_path):
+                if not self._is_running: break
+                
+                # Skip some protected/system dirs that take forever or error out
+                if "$Recycle.Bin" in root or "System Volume Information" in root:
+                    continue
+                    
+                self.progress_signal.emit(f"掃描大型檔案: {root}")
+                for file_name in files:
+                    file_path = os.path.join(root, file_name)
+                    try:
+                        if not os.path.islink(file_path):
+                            size = os.path.getsize(file_path)
+                            if size > min_bytes:
+                                self.item_found_signal.emit({
+                                    "type": "large_file",
+                                    "label": file_name,
+                                    "path": file_path,
+                                    "size": size,
+                                    "isdir": False
+                                })
+                                self.total_size += size
+                                self.total_count += 1
+                    except OSError:
+                        continue
+        except OSError:
+            pass
+
+    def deep_scan_directory(self, start_path, type_label):
+        # We only return top level folders inside the start_path that are > 10MB to avoid clutter
+        try:
+            for item in os.listdir(start_path):
+                if not self._is_running: break
+                item_path = os.path.join(start_path, item)
+                if os.path.isdir(item_path):
+                    self.progress_signal.emit(f"分析資料夾: {item}")
+                    size = self.calculate_folder_size(item_path)
+                    if size > 10 * 1024 * 1024:  # Only report folders > 10MB
+                        self.item_found_signal.emit({
+                            "type": type_label,
+                            "label": item,
+                            "path": item_path,
+                            "size": size,
+                            "isdir": True
+                        })
+                        self.total_size += size
+                        self.total_count += 1
+        except OSError:
+            pass
+
+    def calculate_folder_size(self, path):
+        total_size = 0
+        try:
+            if os.path.isfile(path):
+                return os.path.getsize(path)
+
+            for root, _, files in os.walk(path):
+                if not self._is_running: break
+                for file_name in files:
+                    file_path = os.path.join(root, file_name)
+                    try:
+                        if not os.path.islink(file_path):
+                            total_size += os.path.getsize(file_path)
+                    except OSError:
+                        continue
+        except OSError:
+            return 0
+        return total_size
+
+    def get_common_candidates(self, drive_root):
+        candidates = []
+        if os.name != "nt":
+            return [
+                {"label": "系統暫存資料夾", "path": "/tmp"},
+                {"label": "使用者快取資料夾", "path": os.path.expanduser("~/.cache")},
+            ]
+
+        drive = drive_root.rstrip("\\/")
+        home_dir = os.path.expanduser("~")
+        user_profile = home_dir if home_dir.startswith(drive) else None
+
+        candidates.extend([
+            {"label": "Windows 暫存資料夾", "path": f"{drive}\\Windows\\Temp"},
+            {"label": "Windows 更新下載快取", "path": f"{drive}\\Windows\\SoftwareDistribution\\Download"},
+            {"label": "系統回收桶", "path": f"{drive}\\$Recycle.Bin"},
+        ])
+
+        if user_profile:
+            candidates.extend([
+                {"label": "使用者 Temp", "path": os.path.join(user_profile, "AppData", "Local", "Temp")},
+                {"label": "IE/Edge 快取", "path": os.path.join(user_profile, "AppData", "Local", "Microsoft", "Windows", "INetCache")},
+                {"label": "縮圖快取", "path": os.path.join(user_profile, "AppData", "Local", "Microsoft", "Windows", "Explorer")},
+                {"label": "程式崩潰記錄", "path": os.path.join(user_profile, "AppData", "Local", "CrashDumps")},
+                {"label": "NPM 快取", "path": os.path.join(user_profile, "AppData", "Local", "npm-cache")},
+                {"label": "Python Pip 快取", "path": os.path.join(user_profile, "AppData", "Local", "pip", "Cache")},
+                {"label": "Discord 快取", "path": os.path.join(user_profile, "AppData", "Roaming", "discord", "Cache")},
+                {"label": "Slack 快取", "path": os.path.join(user_profile, "AppData", "Roaming", "Slack", "Cache")},
+                {"label": "Chrome 快取", "path": os.path.join(user_profile, "AppData", "Local", "Google", "Chrome", "User Data", "Default", "Cache")},
+                {"label": "LINE 資料 (貼圖/快取可能會很大)", "path": os.path.join(user_profile, "AppData", "Local", "LINE", "Data")},
+                {"label": "Firefox Profiles", "path": os.path.join(user_profile, "AppData", "Roaming", "Mozilla", "Firefox", "Profiles")},
+            ])
+
+        return candidates
 
 from utils import (
     resize_with_padding, resize_image, Config,
@@ -3641,8 +3809,23 @@ class MediaToolkit(QMainWindow):
         drive_layout.addStretch()
         cleanup_layout.addLayout(drive_layout)
 
-        self.cleanupList = QListWidget()
-        cleanup_layout.addWidget(self.cleanupList)
+        self.chk_scan_common = QCheckBox("掃描常見快取 (快速)")
+        self.chk_scan_common.setChecked(True)
+        self.chk_scan_appdata = QCheckBox("深入分析 AppData (較慢)")
+        self.chk_scan_large = QCheckBox("找出超大檔案 (>500MB)")
+        
+        options_layout = QHBoxLayout()
+        options_layout.addWidget(self.chk_scan_common)
+        options_layout.addWidget(self.chk_scan_appdata)
+        options_layout.addWidget(self.chk_scan_large)
+        options_layout.addStretch()
+        cleanup_layout.addLayout(options_layout)
+
+        self.cleanupTree = QTreeWidget()
+        self.cleanupTree.setHeaderLabels(["名稱 / 路徑", "大小", "類型"])
+        self.cleanupTree.setColumnWidth(0, 450)
+        self.cleanupTree.setColumnWidth(1, 100)
+        cleanup_layout.addWidget(self.cleanupTree)
 
         self.lblCleanupSummary = QLabel("尚未掃描")
         cleanup_layout.addWidget(self.lblCleanupSummary)
@@ -3688,6 +3871,13 @@ class MediaToolkit(QMainWindow):
                 {"label": "IE/Edge 快取", "path": os.path.join(user_profile, "AppData", "Local", "Microsoft", "Windows", "INetCache")},
                 {"label": "縮圖快取", "path": os.path.join(user_profile, "AppData", "Local", "Microsoft", "Windows", "Explorer")},
                 {"label": "程式崩潰記錄", "path": os.path.join(user_profile, "AppData", "Local", "CrashDumps")},
+                {"label": "NPM 快取", "path": os.path.join(user_profile, "AppData", "Local", "npm-cache")},
+                {"label": "Python Pip 快取", "path": os.path.join(user_profile, "AppData", "Local", "pip", "Cache")},
+                {"label": "Discord 快取", "path": os.path.join(user_profile, "AppData", "Roaming", "discord", "Cache")},
+                {"label": "Slack 快取", "path": os.path.join(user_profile, "AppData", "Roaming", "Slack", "Cache")},
+                {"label": "Chrome 快取", "path": os.path.join(user_profile, "AppData", "Local", "Google", "Chrome", "User Data", "Default", "Cache")},
+                {"label": "LINE 資料 (貼圖/快取可能會很大)", "path": os.path.join(user_profile, "AppData", "Local", "LINE", "Data")},
+                {"label": "Firefox Profiles", "path": os.path.join(user_profile, "AppData", "Roaming", "Mozilla", "Firefox", "Profiles")},
             ])
 
         return candidates
@@ -3720,47 +3910,92 @@ class MediaToolkit(QMainWindow):
         return f"{size_bytes} B"
 
     def scanCleanupCandidates(self):
-        self.cleanupList.clear()
+        self.cleanupTree.clear()
         self.cleanup_candidates_map = {}
+        
         drive_root = self.comboCleanupDrive.currentText()
-        candidates = self.get_cleanup_candidates(drive_root)
+        scan_common = self.chk_scan_common.isChecked()
+        scan_appdata = self.chk_scan_appdata.isChecked()
+        scan_large = self.chk_scan_large.isChecked()
+        
+        if not any([scan_common, scan_appdata, scan_large]):
+            QMessageBox.warning(self, "未選擇項目", "請至少勾選一項掃描範圍")
+            return
 
-        total_size = 0
-        shown_count = 0
-        for candidate in candidates:
-            path = candidate["path"]
-            if not os.path.exists(path):
-                continue
+        self.lblCleanupSummary.setText("開始深入掃描中... 請稍候")
+        
+        self.worker = DiskScanWorker(drive_root, scan_common, scan_appdata, scan_large)
+        self.worker.progress_signal.connect(self._on_scan_progress)
+        self.worker.item_found_signal.connect(self._on_item_found)
+        self.worker.finished_signal.connect(self._on_scan_finished)
+        self.worker.start()
 
-            size = self.calculate_folder_size(path)
-            if size <= 0:
-                continue
+    def _on_scan_progress(self, msg):
+        self.lblCleanupSummary.setText(f"掃描中: {msg}")
 
-            shown_count += 1
-            total_size += size
-            self.cleanup_candidates_map[path] = candidate["label"]
-            item_text = f"[{candidate['label']}] {path}（約 {self.format_size(size)}）"
-            item = QListWidgetItem(item_text)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
-            item.setData(Qt.UserRole, path)
-            self.cleanupList.addItem(item)
+    def _on_item_found(self, item_data):
+        # We categorize the items into top level nodes
+        type_group = item_data.get("type", "其他")
+        
+        # Mapping groups to readable names
+        group_names = {
+            "common": "🧹 常見快取與暫存檔",
+            "large_file": "📁 超大檔案 (>500MB)",
+            "appdata": "🌐 AppData 分析 (較大資料夾)"
+        }
+        
+        group_name = group_names.get(type_group, "其他")
+        
+        # Find or create root node
+        root_items = self.cleanupTree.findItems(group_name, Qt.MatchExactly, 0)
+        if root_items:
+            root_node = root_items[0]
+        else:
+            root_node = QTreeWidgetItem(self.cleanupTree)
+            root_node.setText(0, group_name)
+            root_node.setFlags(root_node.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+            root_node.setCheckState(0, Qt.Unchecked)
+            self.cleanupTree.addTopLevelItem(root_node)
 
-        if shown_count == 0:
-            self.lblCleanupSummary.setText("未找到可建議清理的項目，或目前資料夾大小為 0")
-            QMessageBox.information(self, "掃描完成", "沒有找到可清理建議。")
+        # Create child item
+        path = item_data["path"]
+        self.cleanup_candidates_map[path] = item_data["label"]
+        
+        child = QTreeWidgetItem(root_node)
+        child.setText(0, item_data["label"])
+        child.setText(1, self.format_size(item_data["size"]))
+        child.setText(2, "資料夾" if item_data.get("isdir") else "檔案")
+        child.setToolTip(0, path)
+        child.setData(0, Qt.UserRole, path)
+        child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+        child.setCheckState(0, Qt.Unchecked)
+        
+        # Expand the root to see items coming in
+        root_node.setExpanded(True)
+
+    def _on_scan_finished(self, total_size, total_count):
+        if total_count == 0:
+            self.lblCleanupSummary.setText("未找到可建議清理的項目，或目前選取的範圍大小為 0")
+            QMessageBox.information(self, "掃描完成", "沒有找到符合的清理建議項目。")
         else:
             self.lblCleanupSummary.setText(
-                f"共找到 {shown_count} 個建議項目，預估可釋放 {self.format_size(total_size)}"
+                f"✅ 掃描完成！共找到 {total_count} 個建議項目，預估可釋放 {self.format_size(total_size)}"
             )
 
     def deleteSelectedCleanupItems(self):
         import shutil
         selected_paths = []
-        for index in range(self.cleanupList.count()):
-            item = self.cleanupList.item(index)
-            if item.checkState() == Qt.Checked:
-                selected_paths.append(item.data(Qt.UserRole))
+        
+        # Traverse tree to find checked leaf items
+        root_count = self.cleanupTree.topLevelItemCount()
+        for i in range(root_count):
+            root = self.cleanupTree.topLevelItem(i)
+            for j in range(root.childCount()):
+                child = root.child(j)
+                if child.checkState(0) == Qt.Checked:
+                    path = child.data(0, Qt.UserRole)
+                    if path:
+                        selected_paths.append(path)
 
         if not selected_paths:
             QMessageBox.warning(self, "警告", "請先勾選要刪除的項目")
@@ -3781,8 +4016,9 @@ class MediaToolkit(QMainWindow):
 
         for path in selected_paths:
             try:
+                # To prevent accidental deletions, we still check against our map
                 if path not in self.cleanup_candidates_map:
-                    error_messages.append(f"{path}: 不在目前掃描建議清單中，已略過")
+                    error_messages.append(f"{path}: 不在安全清單中，已略過")
                     continue
 
                 if os.path.isfile(path):
@@ -3801,6 +4037,7 @@ class MediaToolkit(QMainWindow):
             except Exception as e:
                 error_messages.append(f"{path}: {e}")
 
+        # Rescan after deletion to refresh tree
         self.scanCleanupCandidates()
 
         message = f"已處理 {deleted_count} 個項目。"
